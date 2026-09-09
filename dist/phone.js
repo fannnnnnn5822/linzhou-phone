@@ -7,7 +7,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '1.5.1';
+  var VERSION = '1.5.3';
   var NS = 'lz-phone';
   var BTN = '\u{1F4F1}手机';
   var CATBOX = 'https://files.catbox.moe/';
@@ -225,6 +225,20 @@
     var es = await wbEntries(); if (!es.length) return '';
     return cut(wbFind(es, function (n) { return n.indexOf('三人羁绊') === 0; }), 700);
   }
+  // 原卡的手机规则（「手机私聊」/「手机群聊」条目）：只要行为部分——一轮几条、交替发言、隐私防火墙、贴剧情；
+  // 格式部分（[私聊xx]/[我方消息|…]/头像/标签）全剥掉，那是原卡自己的输出协议，喂进去会和我们的格式打架
+  var RULE_DROP = /[\[【].*[|｜].*[\]】]|格式|头像|包裹|标签|指令|页面|暂停当前剧情|示例|\{\{|`|^---|^#指示|正文部分|必须且只能|Placeholder|\[\/|置于聊天记录的最顶部/;
+  async function phoneRulesOf(kind) {
+    var es = await wbEntries(); if (!es.length) return '';
+    var txt = wbFind(es, function (n) { return n.indexOf(kind === 'group' ? '手机群聊' : '手机私聊') === 0; }); if (!txt) return '';
+    var out = [];
+    txt.split('\n').forEach(function (l) {
+      var s = l.trim(); if (!s || RULE_DROP.test(s)) return;
+      if (/^#/.test(s)) { s = s.replace(/^#+\s*/, '▸ '); }
+      out.push(s);
+    });
+    return cut(out.join('\n'), 700);
+  }
   // 群的定义：「群聊列表」条目里 #### 群聊: 名 那一段
   async function groupDefOf(g) {
     var es = await wbEntries(); if (!es.length) return '';
@@ -314,6 +328,20 @@
   // 关了脚本只是退回代码块，一个字不丢。每个会话记水位线 f_<chatId>，写过的不重写。
   function userName() { try { var n = substitudeMacros('{{user}}'); if (n && n.indexOf('{{') < 0) return n; } catch (e) {} return 'User'; }
   function fenceSafe(s) { return String(s == null ? '' : s).replace(/```/g, "'''").replace(/[\r\n]+/g, ' / '); }
+  // 楼尾的状态块（预设的 time:/location:/atmosphere: 尾巴、<status>…</status> 之类）靠预设自己的正则藏起来，
+  // 那些正则多半锚定在楼层末尾——我们的气泡要是追加在它后面，它就露出来了（9-09 Fan 真机报）。
+  // 所以先把楼层切成「正文 + 尾巴」，气泡插在尾巴前面，尾巴仍留在最后。
+  var TAIL_LINE = /^\s*(<\/?[a-z_][\w-]*>\s*$|<[a-z_][\w-]*>[\s\S]*<\/[a-z_][\w-]*>\s*$|[\[【]?\s*(status|状态栏?|统计)[\]】]?\s*$)/i;
+  function splitTail(txt) {
+    var lines = txt.split('\n'), i = lines.length;
+    while (i > 0) {
+      var l = lines[i - 1];
+      if (!l.trim() || JUNK_LINE.test(l) || TAIL_LINE.test(l) || /^\s*<[a-z_]/i.test(l)) { i--; continue; }
+      break;
+    }
+    // 尾巴前面那一行如果是它的开标签（<status>），也算尾巴
+    return { body: lines.slice(0, i).join('\n').replace(/\s+$/, ''), tail: lines.slice(i).join('\n').replace(/^\s+/, '') };
+  }
   async function appendFloorBubbles(chatId, title) {
     if (cfg.floor === false) return;
     var hist = getHistory(chatId), mark = phoneData()['f_' + chatId] || 0;
@@ -325,8 +353,11 @@
     seg.forEach(function (m) {
       if (m.kind === 'claim') { rows.push('\xB7 ' + (m.sender === 'user' ? me : (m.senderName || '对方')) + ' 领取了红包'); return; }
       var who = m.sender === 'user' ? me : (m.senderName || '?');
-      rows.push(fenceSafe(who).replace(/:/g, '：') + ': ' + fenceSafe(msgToText(m)));
+      var t = msgToText(m);
+      if (!t || JUNK_LINE.test(t)) return;   // 旧记录里漏进来的预设字段行（atmosphere: 之类）不带进正文
+      rows.push(fenceSafe(who).replace(/:/g, '：') + ': ' + fenceSafe(t));
     });
+    if (rows.length < 2) return;
     var body = rows.join('\n');
     try {
       var lastId = getLastMessageId();
@@ -335,13 +366,14 @@
       if (m0 && m0.role === 'assistant') {
         var txt = String(m0.message || '');
         if (txt.indexOf(body) !== -1) return;
-        var tail = txt.replace(/\s+$/, ''), updated;
-        var open = tail.lastIndexOf('```chat\n');
-        if (open >= 0 && tail.slice(open + 8).lastIndexOf('```') === tail.length - open - 8 - 3) {
-          updated = tail.slice(0, tail.length - 3).replace(/\s+$/, '') + '\n' + body + '\n```';
+        var parts = splitTail(txt), main = parts.body, updated;
+        var open = main.lastIndexOf('```chat\n');
+        if (open >= 0 && main.slice(open + 8).lastIndexOf('```') === main.length - open - 8 - 3) {
+          main = main.slice(0, main.length - 3).replace(/\s+$/, '') + '\n' + body + '\n```';
         } else {
-          updated = tail + '\n\n```chat\n' + body + '\n```';
+          main = main + '\n\n```chat\n' + body + '\n```';
         }
+        updated = parts.tail ? main + '\n\n' + parts.tail : main;
         await setChatMessages([{ message_id: m0.message_id, message: updated }], { refresh: 'affected' });
       } else {
         await createChatMessages([{ role: 'assistant', message: '```chat\n' + body + '\n```', is_hidden: false }]);
@@ -1175,7 +1207,7 @@
         return l.replace(new RegExp('^\\s*' + c.name + '\\s*[:：]\\s*'), '').replace(/^\s*[-•·]\s*/, '').trim();
       }).filter(Boolean).slice(0, 5);
       for (var i = 0; i < lines.length; i++) {
-        var m = parseNpcLine(lines[i], c);
+        var m = parseNpcLine(lines[i], c); if (!m) continue;
         if (m.kind === 'claim' && !claimLastUserPacket(hist)) continue;   // 没红包可领就当它没说
         if (m.kind === 'redpacket') m.id = 'n' + Date.now() + i;
         hist.push(m);
@@ -1241,7 +1273,7 @@
       hideTyping();
       var got = 0;
       var lines = reply.split('\n');
-      for (var i = 0; i < lines.length && got < 7; i++) {
+      for (var i = 0; i < lines.length && got < 12; i++) {
         var line = lines[i].replace(/^\s*[-•·]\s*/, '').trim(); if (!line) continue;
         var k = line.search(/[:：]/); if (k <= 0 || k > 8) continue;
         var name = line.substring(0, k).replace(/[\[\]【】]/g, '').trim(), body = line.substring(k + 1).trim();
@@ -1252,7 +1284,7 @@
           if (!/[一-鿿]/.test(name) || JUNK_LINE.test(line)) continue;   // 纯英文"名字"多半是预设的状态字段（atmosphere:/costume:），不是同学
           c = { id: 'npc_' + name, name: name, avatar: '', theme: '#8a7d70' };   // 开放群里的随机同学/陌生人
         }
-        var m = parseNpcLine(body, c);
+        var m = parseNpcLine(body, c); if (!m) continue;
         if (m.kind === 'claim' && !claimLastUserPacket(hist)) continue;
         if (m.kind === 'redpacket') m.id = 'n' + Date.now() + i;
         hist.push(m);
@@ -1301,7 +1333,26 @@
     if (/^\(?\s*(领取|收下|拆)红包\s*\)?$/.test(line)) {
       return { sender: c.id, senderName: c.name, avatar: c.avatar, kind: 'claim', text: '', time: hhmm() };
     }
+    // 表情包白名单：模型爱编名字（"探头"），不在 88 张里就近似匹配，匹配不到整行丢
+    var sb = line.match(/<bqb>\s*(.*?)\s*<\/bqb>/);
+    if (sb) {
+      var real = resolveSticker(sb[1]);
+      if (!real) return null;
+      line = '<bqb>' + real + '</bqb>';
+    }
+    if (JUNK_LINE.test(line)) return null;
     return { sender: c.id, senderName: c.name, avatar: c.avatar, text: line, time: hhmm() };
+  }
+  var STICKER_SYN = { '探头': '偷看', '偷偷看': '偷看', '哭': '蛙蛙哭泣', '哭泣': '蛙蛙哭泣', '问号': '猫咪问号', '疑问': '猫咪问号', '笑': '【可爱】大笑', '哈哈': '【可爱】大笑', '害羞': '有一丁点害羞', '晚安': '睡了拜拜', '道歉': '【可爱】道歉', '抱抱': '老公抱抱', '摸鱼': '摆烂' };
+  function resolveSticker(name) {
+    name = String(name || '').trim().replace(/^[【\[]|[】\]]$/g, '');
+    if (STICKERS[name]) return name;
+    if (STICKER_SYN[name]) return STICKER_SYN[name];
+    for (var i = 0; i < STICKER_NAMES.length; i++) {
+      var n = STICKER_NAMES[i], bare = n.replace(/【.*?】/g, '');
+      if (bare === name || n.indexOf(name) !== -1 || (name.length >= 2 && bare.indexOf(name) !== -1)) return n;
+    }
+    return '';
   }
   // 对方领取时同步改屏幕上那只红包（存档在循环结束才落盘，不能从存档重绘）
   function markUserPacketOpenedDom() {
@@ -1333,16 +1384,17 @@
 
   async function generatePrivate(c, hist) {
     var ctx = mainContext();
-    var persona = await personaOf(c), online = await onlineStyleOf(c), bond = await bondOf(c);
+    var persona = await personaOf(c), online = await onlineStyleOf(c), bond = await bondOf(c), rules = await phoneRulesOf('private');
     var p = '你正在扮演校园故事《霖州往事》里的「' + c.name + '」，通过微信私聊回复{{user}}。\n\n' +
       '【' + c.name + '的人物档案】\n' + persona + '\n\n' +
       (persona !== c.voice ? '【说话方式速记】' + c.voice + '\n\n' : '') +
       (online ? '【线上人设】\n' + online + '\n\n' : '') +
       (bond ? '【三人羁绊】\n' + bond + '\n\n' : '') +
+      (rules ? '【原卡的手机聊天规则（行为部分；输出格式以下方【输出规则】为准）】\n' + rules + '\n\n' : '') +
       (ctx ? '【主线剧情（最近发生的事，手机聊天要接得上）】\n' + ctx + '\n\n' : '') +
       '【微信聊天记录】\n' + histText(hist, 14) + '\n\n' +
       '【输出规则】\n' +
-      '- 只写' + c.name + '发出的新消息，1～3 条，每条一行，只写消息内容\n' +
+      '- 只写' + c.name + '发出的新消息，1～4 条按情绪和话题波动（不要每次都一样多），每条一行，只写消息内容\n' +
       '- 每条不超过 35 字，像真人打字，不复述{{user}}的话\n' +
       '- 想发表情包时单独一行写 <bqb>表情包名</bqb>，可选：' + stickerHint(30) + '\n' +
       RICH_RULES +
@@ -1353,7 +1405,8 @@
   async function generateGroup(g, hist) {
     var ctx = mainContext();
     var names = g.members.map(function (id) { var c = findContact(id); return c ? c.name : id; });
-    var def = await groupDefOf(g);
+    var def = await groupDefOf(g), rules = await phoneRulesOf('group');
+    var cnt = g.open ? '5～10' : (g.members.length <= 3 ? '3～6' : '4～8');
     // 群里人多，每人只喂档案前 500 字 + 手写速记；最近说过话的人多给一点
     var recent = {}; hist.slice(-12).forEach(function (m) { if (m.sender !== 'user') recent[m.sender] = 1; });
     var voices = [];
@@ -1366,10 +1419,11 @@
       (g.open ? '，以及若干未列名的同学/陌生人（可以让他们冒泡，起真实的昵称）' : '') + '。\n\n' +
       (def ? '【这个群（来自世界书）】\n' + def + '\n\n' : '') +
       '【各人档案与说话方式】\n' + voices.join('\n') + '\n\n' +
+      (rules ? '【原卡的群聊规则（行为部分；输出格式以下方【输出规则】为准）】\n' + rules + '\n\n' : '') +
       (ctx ? '【主线剧情（最近发生的事）】\n' + ctx + '\n\n' : '') +
       '【群聊记录】\n' + histText(hist, 18) + '\n\n' +
       '【输出规则】\n' +
-      '- 输出 2～5 条群成员的新消息，每条一行，格式严格为「角色名：消息」\n' +
+      '- 输出 ' + cnt + ' 条群成员的新消息（热闹话题可多、冷场可少），每条一行，格式严格为「角色名：消息」\n' +
       '- 不必人人都说话，谁会接这句谁说；可以互相接梗、互相拆台' + (g.open ? '；名单外的人用「昵称：消息」也行' : '') + '\n' +
       '- 每条不超过 35 字，像真人在群里打字\n' +
       '- 想发表情包写「角色名：<bqb>表情包名</bqb>」，可选：' + stickerHint(20) + '\n' +
