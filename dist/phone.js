@@ -7,7 +7,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '1.5.0';
+  var VERSION = '1.5.1';
   var NS = 'lz-phone';
   var BTN = '\u{1F4F1}手机';
   var CATBOX = 'https://files.catbox.moe/';
@@ -145,14 +145,19 @@
     return bqbToText(m.text || '');
   }
   function voiceSecs(t) { return Math.max(1, Math.min(60, Math.round((t || '').replace(/\s/g, '').length / 3.5))); }
-  var JUNK_LINE = /^\s*(time|location|npc|event|status|状态|时间|地点|人物|事件)\s*[:：]/i;
+  // 玩家预设（Horae/Mortal 系）会命令模型在一切输出末尾追加状态栏字段，副轨也逃不掉（SB 发卡日验尸过）。
+  // 解析侧是唯一可靠的防线：认出第一条字段行，从它开始整段砍掉；字段词表尽量全。
+  var JUNK_LINE = /^\s*[\[\(（【<]?\s*(npc|affection|time|location|atmosphere|characters?|costume|clothes|outfit|event|agenda|item|items|summary|date|mood|weather|scene|status|state|thought|thoughts|relationship|favor|人物|角色|事件|地点|时间|氛围|气氛|服装|着装|穿着|状态|心情|情绪|天气|场景|物品|日程|好感|好感度|关系|备注|总结)\s*[:：=]/i;
   function cleanAI(s) {
-    return (s || '')
+    var txt = (s || '')
       .replace(/```[\s\S]*?```/g, '')
-      .replace(/<(think|thinking|update_variable|initvar|Analysis)>[\s\S]*?<\/\1>/gi, '')
-      .replace(/<(?!\/?bqb>)[^>]*>/g, '')
-      .split('\n').filter(function (l) { return !JUNK_LINE.test(l); }).join('\n')
-      .trim();
+      .replace(/<(think|thinking|update_variable|initvar|Analysis|horae\w*)>[\s\S]*?<\/\1>/gi, '')
+      .replace(/<(?!\/?bqb>)[^>]*>/g, '');
+    var lines = txt.split('\n'), cut = -1;
+    for (var i = 0; i < lines.length; i++) { if (JUNK_LINE.test(lines[i])) { cut = i; break; } }
+    if (cut > 0) lines = lines.slice(0, cut);                                   // 状态栏尾巴：从第一条字段行起全砍
+    else if (cut === 0) lines = lines.filter(function (l) { return !JUNK_LINE.test(l); });   // 开头就是字段行（少见）：只剥字段行
+    return lines.join('\n').trim();
   }
 
   // ─── 人设单一真源 = 卡的世界书（按条目名/段落挑，绝不整本拉——整本会把主线格式规则灌进副轨打架） ───
@@ -1244,6 +1249,7 @@
         var c = contactByName(name);
         if (!c) {
           if (!g.open || name.length > 8 || name === userName() || /^(我|user)$/i.test(name)) continue;
+          if (!/[一-鿿]/.test(name) || JUNK_LINE.test(line)) continue;   // 纯英文"名字"多半是预设的状态字段（atmosphere:/costume:），不是同学
           c = { id: 'npc_' + name, name: name, avatar: '', theme: '#8a7d70' };   // 开放群里的随机同学/陌生人
         }
         var m = parseNpcLine(body, c);
