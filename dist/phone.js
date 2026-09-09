@@ -7,7 +7,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '1.5.5';
+  var VERSION = '1.6.0';
   var NS = 'lz-phone';
   var BTN = '\u{1F4F1}手机';
   var CATBOX = 'https://files.catbox.moe/';
@@ -132,7 +132,36 @@
   }
   function esc(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
   function pad2(n) { return (n < 10 ? '0' : '') + n; }
-  function hhmm() { var d = new Date(); return pad2(d.getHours()) + ':' + pad2(d.getMinutes()); }
+  // ─── 剧情时间：从最后一楼正文里认时间（卡的状态栏「时间：19:50」/ 预设尾巴「time:2026/10/30 19:50」/ SB 式 [TIME:HH:MM|日期]），
+  //     认到了手机时钟、锁屏日期、消息时间戳全跟剧情走；认不到退回真实时间 ───
+  var _story = { id: -1, time: '', date: '', y: 0, m: 0, d: 0 };
+  function storyClock() {
+    try {
+      var lastId = getLastMessageId();
+      if (lastId == null || lastId < 0) return _story;
+      if (lastId === _story.id) return _story;
+      var msgs = getChatMessages(String(lastId)), txt = msgs && msgs[0] ? String(msgs[0].message || '') : '';
+      var time = '', y = 0, mo = 0, d = 0, m;
+      if ((m = txt.match(/\[TIME:\s*(\d{1,2}):(\d{2})(?:\s*\|\s*(\d{4})[-/](\d{1,2})[-/](\d{1,2}))?/i))) { time = pad2(+m[1]) + ':' + m[2]; if (m[3]) { y = +m[3]; mo = +m[4]; d = +m[5]; } }
+      else if ((m = txt.match(/\btime\s*[:：]\s*(?:(\d{4})[-/.](\d{1,2})[-/.](\d{1,2}))?\s*(\d{1,2}):(\d{2})/i))) { time = pad2(+m[4]) + ':' + m[5]; if (m[1]) { y = +m[1]; mo = +m[2]; d = +m[3]; } }
+      else if ((m = txt.match(/时间\s*[:：]\s*([^\n<|]{0,30}?)(\d{1,2})[:：](\d{2})/))) {
+        time = pad2(+m[2]) + ':' + m[3];
+        var dm = m[1].match(/(\d{4})[年./-](\d{1,2})[月./-](\d{1,2})/) || m[1].match(/(\d{1,2})月(\d{1,2})日/);
+        if (dm) { if (dm.length === 4) { y = +dm[1]; mo = +dm[2]; d = +dm[3]; } else { mo = +dm[1]; d = +dm[2]; } }
+      }
+      _story = { id: lastId, time: time, y: y, m: mo, d: d, date: mo && d ? mo + '月' + d + '日' : '' };
+    } catch (e) {}
+    return _story;
+  }
+  function hhmm() { var s = storyClock(); if (s.time) return s.time; var dt = new Date(); return pad2(dt.getHours()) + ':' + pad2(dt.getMinutes()); }
+  function storyDateStr() {
+    var s = storyClock(), now = new Date();
+    if (s.m && s.d) {
+      var dt = new Date(s.y || now.getFullYear(), s.m - 1, s.d);
+      return s.m + '月' + s.d + '日 星期' + ['日', '一', '二', '三', '四', '五', '六'][dt.getDay()];
+    }
+    return (now.getMonth() + 1) + '月' + now.getDate() + '日 星期' + ['日', '一', '二', '三', '四', '五', '六'][now.getDay()];
+  }
   function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
   function $(id) { return DOC.getElementById(NS + '-' + id); }
   function bqbToText(t) { return t.replace(/<bqb>(.*?)<\/bqb>/g, '(表情:$1)'); }
@@ -513,7 +542,7 @@
       var sp = loadPos(POS_PANEL);
       if (sp) { var cp = clampPos(sp.x, sp.y, p); setClientPos(p, cp.x, cp.y); }
     }
-    unread = 0; syncBadge();
+    syncBadge();
     if (currentScreen === 'lock') showLock(); else showScreen(currentScreen, currentChatId);
   }
   function isOpen() { var p = $('panel'); return !!p && p.style.display === 'flex'; }
@@ -637,6 +666,11 @@
     P + ' .lz-item .lz-nm{font-size:13.5px;font-weight:600;color:var(--ink)}',
     P + ' .lz-item .lz-pv{font-size:11.5px;color:var(--ink2);margin-top:1px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:190px}',
     P + ' .lz-item .lz-tm{font-size:10px;color:var(--ink3);align-self:flex-start;margin-top:2px}',
+    P + ' .lz-q{display:inline-block;margin-left:6px;padding:1px 7px;border-radius:999px;background:var(--sky);color:#fff;font-size:10px;font-weight:600;vertical-align:1px}',
+    P + ' .lz-un{display:inline-block;margin-left:6px;min-width:17px;padding:0 5px;border-radius:9px;background:#e2536a;color:#fff;font-size:10px;font-weight:700;line-height:17px;text-align:center;vertical-align:1px}',
+    P + ' .lz-flush{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:6px 0 2px;padding:9px 12px;border-radius:12px;cursor:pointer;',
+    'background:linear-gradient(135deg,#7BAFD4,#5B93D6);color:#fff;font-size:12.5px;box-shadow:0 4px 12px rgba(91,147,214,.35);animation:' + NS + '-nudge 1.6s ease-in-out infinite}',
+    P + ' .lz-flush b{background:rgba(255,255,255,.22);padding:4px 10px;border-radius:999px;font-weight:600;white-space:nowrap}',
 
     /* ── 聊天 ── */
     P + ' .lz-chat{flex:1;min-height:0;overflow-y:auto;padding:10px 12px;display:flex;flex-direction:column;gap:8px;scrollbar-width:thin;',
@@ -847,12 +881,14 @@
   function ensureMounted() { if (!$('ball') || !$('panel') || !$('style')) { mounted = false; mount(); } }
   function syncBadge() {
     var b = $('ball'); if (!b) return;
+    unread = totalUnread();
     b.classList.toggle('lit', unread > 0);
     var bd = b.querySelector('.lz-badge'); if (bd) bd.textContent = unread > 9 ? '9+' : String(unread);
   }
   function tick() {
     var t = $('time'); if (t) t.textContent = hhmm();
     var lt = $('lock-t'); if (lt) lt.textContent = hhmm();
+    var ld = $('lock-d'); if (ld) ld.textContent = storyDateStr();
   }
 
   // ══════════════════════════════════════
@@ -863,11 +899,10 @@
 
   function showLock() {
     currentScreen = 'lock';
-    var now = new Date(), day = ['日', '一', '二', '三', '四', '五', '六'][now.getDay()];
     body().innerHTML =
       '<div class="lz-lock" id="' + NS + '-lock">' +
         '<div class="lz-t" id="' + NS + '-lock-t">' + hhmm() + '</div>' +
-        '<div class="lz-d">' + (now.getMonth() + 1) + '月' + now.getDate() + '日 星期' + day + '</div>' +
+        '<div class="lz-d" id="' + NS + '-lock-d">' + storyDateStr() + '</div>' +
         '<div class="lz-hint"><b>\u{1F512} 轻触解锁</b></div>' +
       '</div>';
     $('lock').addEventListener('click', function () { showScreen('home'); });
@@ -974,12 +1009,21 @@
 
   function renderHome() {
     var h = '<div class="lz-nav"><h2>微信</h2><small>' + (CONTACTS.length + GROUPS.length) + ' 个会话</small><div class="lz-gear" id="' + NS + '-gear" title="设置">⚙</div></div><div class="lz-list">';
+    var pc = pendingChats();
+    if (pc.length) {
+      var pn = 0; pc.forEach(function (id) { pn += pendingCount(id); });
+      h += '<div class="lz-flush" id="' + NS + '-flush"><span>\u{1F4E8} ' + pc.length + ' 个会话攒了 ' + pn + ' 条没发</span><b>' + (generating ? '发送中…' : '一起发 ➤') + '</b></div>';
+    }
+    var qtag = function (id) {
+      var n = pendingCount(id), u = unreadOf(id);
+      return (u ? '<span class="lz-un">' + (u > 9 ? '9+' : u) + '</span>' : '') + (n ? '<span class="lz-q">待发 ' + n + '</span>' : '');
+    };
     h += '<div class="lz-sec">群聊</div>';
     GROUPS.forEach(function (g) {
       var hist = getHistory('g_' + g.id), last = hist[hist.length - 1];
       var pv = last ? (last.sender === 'user' ? '我' : (last.senderName || '?')) + '：' + preview(last.kind ? msgToText(last) : last.text) : '';
       h += '<div class="lz-item" data-a="group" data-id="' + g.id + '"><div class="lz-av g">' + g.icon + '</div>' +
-        '<div><div class="lz-nm">' + esc(g.name) + '</div><div class="lz-pv">' + esc(pv) + '</div></div>' +
+        '<div><div class="lz-nm">' + esc(g.name) + qtag('g_' + g.id) + '</div><div class="lz-pv">' + esc(pv) + '</div></div>' +
         '<div class="lz-tm">' + (last ? esc(last.time || '') : '') + '</div></div>';
     });
     h += '<div class="lz-sec">联系人</div>';
@@ -987,7 +1031,7 @@
       var hist = getHistory(c.id), last = hist[hist.length - 1];
       var pv = last ? (last.sender === 'user' ? '我：' : '') + preview(last.kind ? msgToText(last) : last.text) : '';
       h += '<div class="lz-item" data-a="chat" data-id="' + c.id + '"><div class="lz-av" style="background-image:url(\'' + catUrl(c.avatar) + '\')"></div>' +
-        '<div><div class="lz-nm">' + esc(c.name) + '</div><div class="lz-pv">' + esc(pv) + '</div></div>' +
+        '<div><div class="lz-nm">' + esc(c.name) + qtag(c.id) + '</div><div class="lz-pv">' + esc(pv) + '</div></div>' +
         '<div class="lz-tm">' + (last ? esc(last.time || '') : '') + '</div></div>';
     });
     h += '</div>';
@@ -996,6 +1040,7 @@
       el.addEventListener('click', function () { showScreen(el.dataset.a, el.dataset.id); });
     });
     $('gear').addEventListener('click', function () { showScreen('settings'); });
+    var fl = $('flush'); if (fl) fl.addEventListener('click', function () { if (generating) return; fl.querySelector('b').textContent = '发送中…'; flushAll(); });
   }
 
   function renderChatUI(title, sub, chatId, queueFn, sendFn) {
@@ -1076,10 +1121,12 @@
   }
   function renderChat(cid) {
     var c = findContact(cid); if (!c) return showScreen('home');
+    clearUnread(cid);
     renderChatUI(c.name, '', cid, function () { queueText(cid); }, function () { sendPrivate(cid); });
   }
   function renderGroup(gid) {
     var g = findGroup(gid); if (!g) return showScreen('home');
+    clearUnread('g_' + gid);
     renderChatUI(g.name, (g.members.length + 1) + ' 人', 'g_' + gid, function () { queueText('g_' + gid); }, function () { sendGroup(gid); });
   }
 
@@ -1150,10 +1197,19 @@
     hist.push(m); appendMsg(m);
     return hist;
   }
-  function noteArrival() {
-    try { if (navigator.vibrate) navigator.vibrate(isOpen() ? 12 : [30, 40, 30]); } catch (e) {}
-    if (!isOpen()) { unread++; syncBadge(); unsnap(); snapSoon(5000); }
+  // 未读：每个会话各记各的（u_<chatId>），进了那个会话就清；球上的角标 = 总和
+  function noteArrival(chatId) {
+    try { if (navigator.vibrate) navigator.vibrate(viewing(chatId) ? 12 : [30, 40, 30]); } catch (e) {}
+    if (viewing(chatId)) return;
+    updatePhone(function (p) { p['u_' + chatId] = (p['u_' + chatId] || 0) + 1; }).then(function () {
+      syncBadge();
+      if (currentScreen === 'home') renderHome();
+      if (!isOpen()) { unsnap(); snapSoon(5000); }
+    });
   }
+  function unreadOf(chatId) { return phoneData()['u_' + chatId] || 0; }
+  function totalUnread() { var d = phoneData(), n = 0; Object.keys(d).forEach(function (k) { if (k.indexOf('u_') === 0) n += d[k] || 0; }); return n; }
+  function clearUnread(chatId) { if (unreadOf(chatId)) updatePhone(function (p) { delete p['u_' + chatId]; }).then(syncBadge); }
 
   // ─── 攒消息：回车/表情包只入队并落盘，➤ 才触发对方回复（队列状态存变量，脚本重载不丢） ───
   function pendingCount(chatId) { return phoneData()['q_' + chatId] || 0; }
@@ -1199,21 +1255,46 @@
     syncSendBtn(chatId);
   }
 
+  // ─── 一键统一发：所有攒了消息的会话按顺序各发各的（当前这个先发），对方各回各的 ───
+  function pendingChats() {
+    var d = phoneData(), out = [];
+    Object.keys(d).forEach(function (k) { if (k.indexOf('q_') === 0 && d[k] > 0) out.push(k.slice(2)); });
+    return out;
+  }
+  function viewing(chatId) {
+    var isG = chatId.indexOf('g_') === 0;
+    return isG ? (currentScreen === 'group' && currentChatId === chatId.slice(2)) : (currentScreen === 'chat' && currentChatId === chatId);
+  }
+  async function flushAll(first) {
+    if (generating) return;
+    var chats = pendingChats();
+    if (first) chats = [first].concat(chats.filter(function (c) { return c !== first; }));
+    if (!chats.length) return;
+    flushing = true;
+    for (var i = 0; i < chats.length; i++) {
+      var id = chats[i];
+      await setPending(id, 0); if (viewing(id)) syncSendBtn(id);
+      if (id.indexOf('g_') === 0) await replyGroup(id.slice(2)); else await replyPrivate(id);
+    }
+    flushing = false;
+    if (currentScreen === 'home') renderHome();
+  }
+  var flushing = false;
+
   async function sendPrivate(cid) {
     if (generating) return;
     await queueText(cid);
-    if (!pendingCount(cid)) return;
-    await setPending(cid, 0); syncSendBtn(cid);
-    await replyPrivate(cid);
+    if (!pendingChats().length) return;
+    await flushAll(cid);
   }
   async function replyPrivate(cid) {
     var c = findContact(cid);
     var hist = getHistory(cid);
-    setBusy(true); showTyping();
+    setBusy(true); if (viewing(cid)) showTyping();
     try {
       var reply = await generatePrivate(c, hist);
       hideTyping();
-      if (!reply) { appendMsg({ sender: 'system', text: c.name + '暂时没回，再发一条试试' }); }
+      if (!reply && viewing(cid)) { appendMsg({ sender: 'system', text: c.name + '暂时没回，再发一条试试' }); }
       var lines = reply.split('\n').map(function (l) {
         return l.replace(new RegExp('^\\s*' + c.name + '\\s*[:：]\\s*'), '').replace(/^\s*[-•·]\s*/, '').trim();
       }).filter(Boolean).slice(0, 5);
@@ -1223,13 +1304,13 @@
         if (m.kind === 'redpacket') m.id = 'n' + Date.now() + i;
         hist.push(m);
         if (currentChatId === cid && currentScreen === 'chat') { if (m.kind === 'claim') markUserPacketOpenedDom(); appendMsg(m); }
-        noteArrival();
+        noteArrival(cid);
         if (i < lines.length - 1) await sleep(350);
       }
       await saveHistory(cid, hist);
       refreshInjection();
       await appendFloorBubbles(cid, '与 ' + c.name + ' 的私聊');
-    } catch (e) { hideTyping(); appendMsg({ sender: 'system', text: '发送失败，请重试' }); console.log('[霖州手机]', e); }
+    } catch (e) { hideTyping(); if (viewing(cid)) appendMsg({ sender: 'system', text: '发送失败，请重试' }); console.log('[霖州手机]', e); }
     setBusy(false);
   }
 
@@ -1237,9 +1318,8 @@
     if (generating) return;
     var chatId = 'g_' + gid;
     await queueText(chatId);
-    if (!pendingCount(chatId)) return;
-    await setPending(chatId, 0); syncSendBtn(chatId);
-    await replyGroup(gid);
+    if (!pendingChats().length) return;
+    await flushAll(chatId);
   }
   // 🔄 重roll：删掉最后一句{{user}}之后对方说的所有话，重新生成；正文只补写新一轮（水位线推到删完的位置）
   async function rerollLast(chatId, isGroup) {
@@ -1278,7 +1358,7 @@
   async function replyGroup(gid) {
     var g = findGroup(gid), chatId = 'g_' + gid;
     var hist = getHistory(chatId);
-    setBusy(true); showTyping();
+    setBusy(true); if (viewing(chatId)) showTyping();
     try {
       var reply = await generateGroup(g, hist);
       hideTyping();
@@ -1300,14 +1380,14 @@
         if (m.kind === 'redpacket') m.id = 'n' + Date.now() + i;
         hist.push(m);
         if (currentChatId === gid && currentScreen === 'group') { if (m.kind === 'claim') markUserPacketOpenedDom(); appendMsg(m); }
-        noteArrival(); got++;
+        noteArrival(chatId); got++;
         await sleep(420);
       }
-      if (!got) appendMsg({ sender: 'system', text: '群里没人接话，再发一条试试' });
+      if (!got && viewing(chatId)) appendMsg({ sender: 'system', text: '群里没人接话，再发一条试试' });
       await saveHistory(chatId, hist);
       refreshInjection();
       await appendFloorBubbles(chatId, '群聊「' + g.name + '」');
-    } catch (e) { hideTyping(); appendMsg({ sender: 'system', text: '发送失败，请重试' }); console.log('[霖州手机]', e); }
+    } catch (e) { hideTyping(); if (viewing(chatId)) appendMsg({ sender: 'system', text: '发送失败，请重试' }); console.log('[霖州手机]', e); }
     setBusy(false);
   }
 
@@ -1473,7 +1553,9 @@
   } catch (e) { console.log('[霖州手机] 脚本按钮注册失败', e); }
 
   try {
+    eventOn(tavern_events.MESSAGE_RECEIVED, function () { _story.id = -1; setTimeout(tick, 300); });   // 新楼来了 → 重新认剧情时间
     eventOn(tavern_events.CHAT_CHANGED, function () {
+      _story.id = -1;
       setOpen(false); currentScreen = 'lock'; currentChatId = null;
       clearTimeout(chatTimer);
       chatTimer = setTimeout(function () { ensureMounted(); placeBall(); refreshInjection(); }, 400);
