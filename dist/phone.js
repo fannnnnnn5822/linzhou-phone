@@ -7,7 +7,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '1.2.0';
+  var VERSION = '1.3.0';
   var NS = 'lz-phone';
   var BTN = '\u{1F4F1}手机';
   var CATBOX = 'https://files.catbox.moe/';
@@ -113,6 +113,14 @@
   function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
   function $(id) { return DOC.getElementById(NS + '-' + id); }
   function bqbToText(t) { return t.replace(/<bqb>(.*?)<\/bqb>/g, '(表情:$1)'); }
+  // 一条消息 → 喂给模型 / 回灌主线用的一行文字（红包、语音都翻成人话）
+  function msgToText(m) {
+    if (m.kind === 'redpacket') return '[发了一个微信红包 ¥' + m.amount + (m.note ? '，留言：' + m.note : '') + (m.opened ? '（已被领取）' : '') + ']';
+    if (m.kind === 'voice') return '[语音 ' + (m.secs || 1) + '″]' + m.text;
+    if (m.kind === 'claim') return '[领取了对方的红包]';
+    return bqbToText(m.text || '');
+  }
+  function voiceSecs(t) { return Math.max(1, Math.min(60, Math.round((t || '').replace(/\s/g, '').length / 3.5))); }
   var JUNK_LINE = /^\s*(time|location|npc|event|status|状态|时间|地点|人物|事件)\s*[:：]/i;
   function cleanAI(s) {
     return (s || '')
@@ -142,7 +150,7 @@
 
   // ─── 设置：存浏览器本地（跟卡/聊天无关） ───
   var CFG_KEY = 'lz_phone_cfg';
-  var DEFAULT_CFG = { apiurl: '', key: '', model: '', source: 'openai', temperature: 1.1, inject: true };
+  var DEFAULT_CFG = { apiurl: '', key: '', model: '', source: 'openai', temperature: 1.1, inject: true, floor: true };
   function loadCfg() {
     try { var raw = VIEW.localStorage.getItem(CFG_KEY); if (raw) return Object.assign({}, DEFAULT_CFG, JSON.parse(raw)); } catch (e) {}
     return Object.assign({}, DEFAULT_CFG);
@@ -181,13 +189,13 @@
     var out = '';
     CONTACTS.forEach(function (c) {
       var h = getHistory(c.id); if (!h.length) return;
-      var lines = h.slice(-6).map(function (m) { return (m.sender === 'user' ? '{{user}}' : c.name) + '：' + bqbToText(m.text); });
+      var lines = h.slice(-6).map(function (m) { return (m.sender === 'user' ? '{{user}}' : c.name) + '：' + msgToText(m); });
       out += '【与' + c.name + '的近期微信私聊 — 仅' + c.name + '与{{user}}知晓，其他角色不应知情】\n' + lines.join('\n') + '\n\n';
     });
     GROUPS.forEach(function (g) {
       var h = getHistory('g_' + g.id); if (!h.length) return;
       var names = g.members.map(function (id) { var c = findContact(id); return c ? c.name : id; });
-      var lines = h.slice(-8).map(function (m) { return (m.sender === 'user' ? '{{user}}' : (m.senderName || '?')) + '：' + bqbToText(m.text); });
+      var lines = h.slice(-8).map(function (m) { return (m.sender === 'user' ? '{{user}}' : (m.senderName || '?')) + '：' + msgToText(m); });
       out += '【群聊「' + g.name + '」（成员：' + names.join('、') + '、{{user}}）近期聊天 — 仅群成员知晓】\n' + lines.join('\n') + '\n\n';
     });
     try { uninjectPrompts([INJ_ID]); } catch (e) {}
@@ -196,6 +204,47 @@
     try {
       injectPrompts([{ id: INJ_ID, position: 'in_chat', depth: 4, role: 'system', content: out, should_scan: true }]);
     } catch (e) { console.log('[霖州手机] 注入失败', e); }
+  }
+
+  // ─── 写进正文（```chat 围栏方案来自 UWU 老师）：对方回完，把这段对话写进最后一楼，玩家看得见 ───
+  // 围栏里是干净的「名字: 内容」纯文本，AI 读得懂；下面 §10 的观察器把它渲染成手机同款气泡；
+  // 关了脚本只是退回代码块，一个字不丢。每个会话记水位线 f_<chatId>，写过的不重写。
+  function userName() { try { var n = substitudeMacros('{{user}}'); if (n && n.indexOf('{{') < 0) return n; } catch (e) {} return 'User'; }
+  function fenceSafe(s) { return String(s == null ? '' : s).replace(/```/g, "'''").replace(/[\r\n]+/g, ' / '); }
+  async function appendFloorBubbles(chatId, title) {
+    if (cfg.floor === false) return;
+    var hist = getHistory(chatId), mark = phoneData()['f_' + chatId] || 0;
+    if (mark > hist.length) mark = 0;
+    var seg = hist.slice(mark); if (!seg.length) return;
+    if (seg.length > 30) seg = seg.slice(-30);
+    var me = userName();
+    var rows = ['#' + hhmm() + ' · ' + fenceSafe(title)];
+    seg.forEach(function (m) {
+      if (m.kind === 'claim') { rows.push('\xB7 ' + (m.sender === 'user' ? me : (m.senderName || '对方')) + ' 领取了红包'); return; }
+      var who = m.sender === 'user' ? me : (m.senderName || '?');
+      rows.push(fenceSafe(who).replace(/:/g, '：') + ': ' + fenceSafe(msgToText(m)));
+    });
+    var body = rows.join('\n');
+    try {
+      var lastId = getLastMessageId();
+      var m0 = null;
+      if (lastId != null && lastId >= 0) { var msgs = getChatMessages(String(lastId)); m0 = (msgs && msgs[0]) || null; }
+      if (m0 && m0.role === 'assistant') {
+        var txt = String(m0.message || '');
+        if (txt.indexOf(body) !== -1) return;
+        var tail = txt.replace(/\s+$/, ''), updated;
+        var open = tail.lastIndexOf('```chat\n');
+        if (open >= 0 && tail.slice(open + 8).lastIndexOf('```') === tail.length - open - 8 - 3) {
+          updated = tail.slice(0, tail.length - 3).replace(/\s+$/, '') + '\n' + body + '\n```';
+        } else {
+          updated = tail + '\n\n```chat\n' + body + '\n```';
+        }
+        await setChatMessages([{ message_id: m0.message_id, message: updated }], { refresh: 'affected' });
+      } else {
+        await createChatMessages([{ role: 'assistant', message: '```chat\n' + body + '\n```', is_hidden: false }]);
+      }
+      await updatePhone(function (p) { p['f_' + chatId] = hist.length; });
+    } catch (e) { console.log('[霖州手机] 写进正文失败', e); }
   }
 
   // ══════════════════════════════════════
@@ -225,17 +274,87 @@
   }
   function isNarrow() { var vp = visibleRect(); return vp.w > 0 && vp.w < 500; }
 
+  // ─── 拖动：位置存 parent localStorage，恢复时夹回视口 ───
+  var POS_PANEL = 'lz_phone_panel_pos';
+  function POS_BALL() { return isNarrow() ? 'lz_phone_ball_pos_n' : 'lz_phone_ball_pos'; }   // 手机/电脑各记各的位置
+  function loadPos(k) { try { var v = JSON.parse(VIEW.localStorage.getItem(k) || 'null'); if (v && isFinite(v.x) && isFinite(v.y)) return v; } catch (e) {} return null; }
+  function savePos(k, p) { try { VIEW.localStorage.setItem(k, JSON.stringify(p)); } catch (e) {} }
+  function clearPos() { try { ['lz_phone_ball_pos', 'lz_phone_ball_pos_n', POS_PANEL].forEach(function (k) { VIEW.localStorage.removeItem(k); }); } catch (e) {} }
+  function keyboardUp() { try { var vv = VIEW.visualViewport; if (!vv) return false; return (VIEW.innerHeight - vv.height - (vv.offsetTop || 0)) > 60; } catch (e) { return false; } }
+
+  // ─── 贴边半藏（只在手机上）：球靠边几秒没人碰 → 半藏 + 半透明；点/拖/来消息/开窗 → 出来 ───
+  var snapTimer = null;
+  function edgeSide() {
+    var b = $('ball'); if (!b) return '';
+    var r = b.getBoundingClientRect(), cx = r.left + r.width / 2, vp = visibleRect();
+    if (cx < 70) return 'l'; if (cx > vp.w - 70) return 'r'; return '';
+  }
+  function snapNow() {
+    if (isOpen() || !isNarrow()) return;
+    var b = $('ball'); if (!b) return;
+    var side = edgeSide(); if (!side) return;
+    b.classList.remove('snap-l', 'snap-r'); b.classList.add('snap-' + side);
+  }
+  function unsnap() {
+    var b = $('ball'); if (b) b.classList.remove('snap-l', 'snap-r');
+    if (snapTimer) { clearTimeout(snapTimer); snapTimer = null; }
+  }
+  function snapSoon(ms) { if (snapTimer) clearTimeout(snapTimer); snapTimer = setTimeout(function () { snapTimer = null; snapNow(); }, ms || 3000); }
+  function setClientPos(el, x, y) {
+    el.style.transform = ''; el.style.right = 'auto'; el.style.bottom = 'auto';
+    el.style.left = '0px'; el.style.top = '0px';
+    var r = el.getBoundingClientRect();
+    var sx = (el.offsetWidth && r.width) ? r.width / el.offsetWidth : 1, sy = (el.offsetHeight && r.height) ? r.height / el.offsetHeight : 1;
+    el.style.left = ((x - r.left) / sx) + 'px'; el.style.top = ((y - r.top) / sy) + 'px';
+  }
+  function clampPos(x, y, el) {
+    var vp = visibleRect(), r = el.getBoundingClientRect();
+    return { x: Math.max(4, Math.min(vp.w - r.width - 4, x)), y: Math.max(4, Math.min(vp.h - r.height - 4, y)) };
+  }
+  function makeDraggable(el, handle, key, onTap, onLongPress) {
+    handle.addEventListener('pointerdown', function (e) {
+      if (e.button) return;
+      if (e.target && e.target.closest && e.target.closest('input,textarea,button,.lz-x')) return;
+      if (handle !== el && isNarrow()) return;
+      if (el === $('ball')) unsnap();
+      var r = el.getBoundingClientRect(), ox = r.left, oy = r.top, x0 = e.clientX, y0 = e.clientY;
+      var moved = false, longFired = false, pid = e.pointerId, lpt = null;
+      try { handle.setPointerCapture(pid); } catch (e1) {}
+      if (onLongPress) lpt = setTimeout(function () { if (!moved) { longFired = true; onLongPress(); } }, 1500);
+      function mv(ev) {
+        var dx = ev.clientX - x0, dy = ev.clientY - y0;
+        if (!moved && Math.abs(dx) < 6 && Math.abs(dy) < 6) return;
+        moved = true; if (lpt) { clearTimeout(lpt); lpt = null; }
+        var p = clampPos(ox + dx, oy + dy, el); setClientPos(el, p.x, p.y);
+      }
+      function up() {
+        handle.removeEventListener('pointermove', mv); handle.removeEventListener('pointerup', up); handle.removeEventListener('pointercancel', up);
+        try { handle.releasePointerCapture(pid); } catch (e2) {}
+        if (lpt) { clearTimeout(lpt); lpt = null; }
+        if (longFired) return;
+        if (moved) { var r2 = el.getBoundingClientRect(); savePos(typeof key === 'function' ? key() : key, { x: r2.left, y: r2.top }); if (el === $('ball')) snapSoon(1500); }
+        else if (onTap) onTap();
+      }
+      handle.addEventListener('pointermove', mv); handle.addEventListener('pointerup', up); handle.addEventListener('pointercancel', up);
+      e.preventDefault();
+    });
+  }
+
   function placeBall() {
     var b = $('ball'); if (!b) return;
+    var saved = loadPos(POS_BALL());
+    if (saved) { var p = clampPos(saved.x, saved.y, b); setClientPos(b, p.x, p.y); snapSoon(3000); return; }
     if (!isNarrow()) { clearPlace(b); return; }
     var vp = visibleRect();
     clientPlace(b, vp.w - 66, inputTop() - 124, 56, 56);
+    snapSoon(3000);
   }
   function setOpen(open) {
     var p = $('panel'), b = $('ball'); if (!p) return;
     phoneOpen = !!open;
     if (b) b.classList.toggle('open', phoneOpen);
-    if (!open) { p.style.display = 'none'; return; }
+    if (!open) { p.style.display = 'none'; snapSoon(2500); return; }
+    unsnap();
     p.style.display = 'flex';
     if (isNarrow()) {
       var vp = visibleRect(), w = Math.min(392, vp.w - 10), top = 6;
@@ -245,6 +364,8 @@
     } else {
       p.classList.remove('narrow');
       clearPlace(p); p.style.maxHeight = ''; p.style.maxWidth = ''; p.style.minHeight = '';
+      var sp = loadPos(POS_PANEL);
+      if (sp) { var cp = clampPos(sp.x, sp.y, p); setClientPos(p, cp.x, cp.y); }
     }
     unread = 0; syncBadge();
     if (currentScreen === 'lock') showLock(); else showScreen(currentScreen, currentChatId);
@@ -256,6 +377,7 @@
       var a = DOC.activeElement;
       if (a && a.closest && a.closest('#' + NS + '-panel') && (a.tagName === 'TEXTAREA' || a.tagName === 'INPUT')) return;
     } catch (e) {}
+    if (keyboardUp()) return;                       // 安卓键盘弹着：球和面板都别动，收了键盘再排
     placeBall(); if (isOpen()) setOpen(true);
   }
 
@@ -268,7 +390,12 @@
     /* ── 悬浮球：墙头探头的猫（无底盘） ── */
     B + '{position:fixed;right:24px;bottom:30px;width:56px;height:56px;box-sizing:border-box;z-index:2147483600;',
     'cursor:pointer;user-select:none;-webkit-tap-highlight-color:transparent;background:none;border:none;',
-    'filter:drop-shadow(0 6px 10px rgba(20,30,50,.5));animation:' + NS + '-float 4.6s ease-in-out infinite;touch-action:manipulation}',
+    'filter:drop-shadow(0 6px 10px rgba(20,30,50,.5));touch-action:none}',
+    B + ' svg{animation:' + NS + '-float 4.6s ease-in-out infinite}',
+    B + ':active{cursor:grabbing}',
+    B + '{transition:transform .28s cubic-bezier(.2,.8,.25,1),opacity .28s}',
+    B + '.snap-r{transform:translateX(52%);opacity:.5}', B + '.snap-l{transform:translateX(-52%);opacity:.5}',
+    B + '.snap-r .lz-badge{right:auto;left:-4px}',
     B + ' .lz-halo{position:absolute;inset:-14px;border-radius:50%;pointer-events:none;',
     'background:radial-gradient(circle,rgba(120,175,230,.55) 0%,rgba(120,175,230,.22) 42%,rgba(120,175,230,0) 68%);',
     'animation:' + NS + '-halo 3.8s ease-in-out infinite}',
@@ -304,7 +431,7 @@
     'background:linear-gradient(180deg,transparent,rgba(255,220,170,.30) 20%,rgba(255,220,170,.30) 80%,transparent);border-radius:2px;pointer-events:none}',
     P + '::after{content:"";position:absolute;inset:8px;border-radius:38px;pointer-events:none;',
     'box-shadow:0 0 0 1px rgba(35,22,12,.65),0 0 0 2px rgba(255,220,170,.05)}',
-    P + '.narrow{border-radius:30px;padding:6px 6px 7px}', P + '.narrow::after{inset:4px;border-radius:26px}',
+    P + '.narrow{border-radius:30px;padding:6px 6px 7px;animation:none}', P + '.narrow::after{inset:4px;border-radius:26px}',
     P + ' *{box-sizing:border-box}',
 
     /* ── 屏幕 ── */
@@ -320,7 +447,7 @@
     'background:rgba(35,22,12,.75);box-shadow:inset 0 1px 1px rgba(0,0,0,.45);z-index:6}',
     P + ' .lz-notch::after{content:"";position:absolute;right:-14px;top:1px;width:4px;height:4px;border-radius:50%;background:#241a12;box-shadow:inset 0 0 2px rgba(255,220,170,.18)}',
     P + ' .lz-rail{position:relative;z-index:5;display:flex;align-items:center;justify-content:space-between;padding:20px 20px 0;',
-    'font-size:11px;font-weight:600;color:rgba(255,255,255,.95);text-shadow:0 1px 2px rgba(0,0,0,.25);font-variant-numeric:tabular-nums;flex:none}',
+    'font-size:11px;font-weight:600;color:rgba(255,255,255,.95);text-shadow:0 1px 2px rgba(0,0,0,.25);font-variant-numeric:tabular-nums;flex:none;cursor:grab;touch-action:none;user-select:none}',
     P + ' .lz-rail .lz-sig{display:inline-flex;gap:2px;align-items:flex-end;margin-right:6px}',
     P + ' .lz-rail .lz-sig i{width:3px;background:currentColor;border-radius:1px;display:block}',
     P + ' .lz-batt{display:inline-flex;align-items:center;gap:4px}',
@@ -396,6 +523,11 @@
     P + ' .lz-send{width:34px;height:34px;border-radius:50%;background:linear-gradient(135deg,#7BAFD4,#5B93D6);color:#fff;display:flex;align-items:center;justify-content:center;',
     'cursor:pointer;flex:none;font-size:15px;box-shadow:0 2px 6px rgba(91,147,214,.35);transition:transform .15s,opacity .15s}',
     P + ' .lz-send:hover{transform:scale(1.06)}', P + ' .lz-send.busy{opacity:.45;pointer-events:none}',
+    P + ' .lz-send{position:relative}',
+    P + ' .lz-send.has{animation:' + NS + '-nudge 1.6s ease-in-out infinite}',
+    P + ' .lz-send.has::after{content:attr(data-n);position:absolute;top:-6px;right:-6px;min-width:17px;height:17px;padding:0 4px;border-radius:9px;',
+    'background:#e2536a;color:#fff;font:700 10px/17px sans-serif;text-align:center;border:2px solid #fff;box-sizing:content-box}',
+    '@keyframes ' + NS + '-nudge{0%,100%{box-shadow:0 2px 6px rgba(91,147,214,.35)}50%{box-shadow:0 2px 14px rgba(91,147,214,.7)}}',
     P + ' .lz-stk{flex:none;display:none;height:220px;overflow-y:auto;padding:8px;background:rgba(250,246,238,.95);border-top:1px solid var(--line);scrollbar-width:thin}',
     P + ' .lz-stk.open{display:block}',
     P + ' .lz-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}',
@@ -404,6 +536,39 @@
     P + ' .lz-cell:hover{transform:scale(1.07);box-shadow:0 3px 10px rgba(0,0,0,.14)}',
     P + ' .lz-cell img{max-width:88%;max-height:88%;object-fit:contain}',
     P + ' ::-webkit-scrollbar{width:4px}', P + ' ::-webkit-scrollbar-thumb{background:rgba(42,34,26,.18);border-radius:2px}',
+
+    /* ── 红包 / 语音 / ➕ 面板 ── */
+    P + ' .lz-bub.rp{padding:0;width:200px;overflow:hidden;cursor:pointer;background:linear-gradient(160deg,#F7734F,#E2432E)!important;color:#fff!important;border-radius:12px!important;box-shadow:0 3px 10px rgba(226,67,46,.35)!important}',
+    P + ' .lz-bub.rp.opened{background:linear-gradient(160deg,#F2B39B,#E39A85)!important;box-shadow:none!important;cursor:default}',
+    P + ' .rp-top{display:flex;align-items:center;gap:10px;padding:12px 12px 10px}',
+    P + ' .rp-ico{font-size:26px;line-height:1;filter:drop-shadow(0 1px 2px rgba(0,0,0,.2))}',
+    P + ' .rp-txt{min-width:0}', P + ' .rp-note{font-size:13.5px;font-weight:600;line-height:1.3;word-break:break-word}',
+    P + ' .rp-st{font-size:10.5px;opacity:.85;margin-top:2px}',
+    P + ' .rp-foot{font-size:10px;padding:5px 12px;background:rgba(255,255,255,.92);color:#8a6d5a}',
+    P + ' .lz-bub.vc{display:flex;align-items:center;gap:8px;cursor:pointer;min-width:70px}',
+    P + ' .lz-msg.me .lz-bub.vc{flex-direction:row-reverse}',
+    P + ' .vc-play{font-size:11px;opacity:.75}', P + ' .vc-sec{font-size:11.5px;opacity:.8;margin-left:auto}', P + ' .lz-msg.me .vc-sec{margin-left:0;margin-right:auto}',
+    P + ' .vc-wave{display:inline-flex;gap:2px;align-items:center;height:14px}',
+    P + ' .vc-wave i{width:2px;border-radius:1px;background:currentColor;opacity:.55;height:6px}',
+    P + ' .vc-wave i:nth-child(2){height:11px}', P + ' .vc-wave i:nth-child(3){height:8px}', P + ' .vc-wave i:nth-child(4){height:13px}', P + ' .vc-wave i:nth-child(5){height:7px}',
+    P + ' .lz-bub.vc.playing .vc-wave i{animation:' + NS + '-wave .9s ease-in-out infinite}',
+    P + ' .lz-bub.vc.playing .vc-wave i:nth-child(2){animation-delay:.15s}', P + ' .lz-bub.vc.playing .vc-wave i:nth-child(4){animation-delay:.3s}',
+    '@keyframes ' + NS + '-wave{0%,100%{transform:scaleY(.5)}50%{transform:scaleY(1.3)}}',
+    P + ' .vc-text{display:none;font-size:12px;color:var(--ink2);background:rgba(255,255,255,.75);border-radius:10px;padding:6px 10px;margin-top:4px;max-width:100%;word-break:break-word}',
+    P + ' .vc-text.show{display:block}',
+    P + ' .lz-plus{width:34px;height:34px;border-radius:50%;display:flex;align-items:center;justify-content:center;cursor:pointer;flex:none;font-size:22px;color:var(--ink2);transition:transform .2s,background .15s}',
+    P + ' .lz-plus:hover{background:rgba(0,0,0,.06)}', P + ' .lz-plus.on{transform:rotate(45deg);background:var(--sky-soft)}',
+    P + ' .lz-more{flex:none;display:none;padding:10px 12px;background:rgba(250,246,238,.96);border-top:1px solid var(--line)}',
+    P + ' .lz-more.open{display:block}',
+    P + ' .lz-more .lz-tabs{display:flex;gap:8px;margin-bottom:8px}',
+    P + ' .lz-more .lz-tab{flex:1;height:40px;border-radius:10px;display:flex;align-items:center;justify-content:center;gap:6px;cursor:pointer;font-size:13px;background:#fff;border:1px solid var(--line);color:var(--ink)}',
+    P + ' .lz-more .lz-tab.on{border-color:var(--sky);background:var(--sky-soft)}',
+    P + ' .lz-more .lz-form{display:none;flex-direction:column;gap:6px}', P + ' .lz-more .lz-form.on{display:flex}',
+    P + ' .lz-more input,' + P + ' .lz-more textarea{height:34px;padding:0 10px;border:1px solid var(--line);border-radius:9px;background:#fff;color:var(--ink);font-size:13px;font-family:inherit;outline:none;-webkit-text-fill-color:var(--ink);color-scheme:light;width:100%}',
+    P + ' .lz-more textarea{height:56px;padding:7px 10px;resize:none}',
+    P + ' .lz-more .lz-go{height:36px;border-radius:10px;border:0;cursor:pointer;font-size:13px;font-family:inherit;color:#fff;background:linear-gradient(135deg,#F7734F,#E2432E)}',
+    P + ' .lz-more .lz-go.vc{background:linear-gradient(135deg,#7BAFD4,#5B93D6)}',
+    P + ' .lz-more .lz-tip{font-size:10.5px;color:var(--ink3)}',
 
     /* ── 设置页 ── */
     P + ' .lz-gear{width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:16px;color:var(--ink2);flex:none}',
@@ -508,14 +673,10 @@
     };
     wall.src = WALL_SRCS[0];
 
-    // 事件
-    var lpt = null, moved = false;
-    ball.addEventListener('click', function () { if (moved) { moved = false; return; } setOpen(!isOpen()); });
-    ball.addEventListener('pointerdown', function () {
-      lpt = setTimeout(function () { generating = false; currentScreen = 'lock'; setOpen(false); placeBall(); }, 1500);
-    });
-    ball.addEventListener('pointerup', function () { clearTimeout(lpt); });
-    ball.addEventListener('pointerleave', function () { clearTimeout(lpt); });
+    // 事件：球=点开合/拖动/长按逃生阀；手机=拖顶部状态栏
+    makeDraggable(ball, ball, POS_BALL, function () { setOpen(!isOpen()); },
+      function () { generating = false; currentScreen = 'lock'; setOpen(false); clearPos(); placeBall(); });
+    makeDraggable(panel, panel.querySelector('.lz-rail'), POS_PANEL, null, null);
     $('x').addEventListener('click', function () { setOpen(false); });
     $('homebar').addEventListener('click', function () { if (currentScreen !== 'lock') showScreen('home'); });
 
@@ -594,7 +755,9 @@
           '<div class="lz-note" id="' + NS + '-note"></div>' +
         '</div>' +
         '<div class="lz-card"><h3>主线联动</h3>' +
-          '<p>开着：手机里聊的内容会悄悄告诉主线 AI（带「仅当事人知晓」框），正文里角色会自然接上。关掉：手机和正文互不知情。</p>' +
+          '<p><b>写进正文</b>：对方回完，这段聊天记录以气泡形式写进上一楼正文，你和 AI 都看得见（UWU 老师的方案）。</p>' +
+          '<div class="lz-pills"><span class="lz-pill' + (c.floor !== false ? ' on' : '') + '" id="' + NS + '-fl-on">写进正文</span><span class="lz-pill' + (c.floor === false ? ' on' : '') + '" id="' + NS + '-fl-off">不写</span></div>' +
+          '<p><b>悄悄告诉主线</b>：另外再把最近几条静默塞进上下文（带「仅当事人知晓」框），玩家看不见、AI 记得住。两个都开最稳。</p>' +
           '<div class="lz-pills"><span class="lz-pill' + (c.inject !== false ? ' on' : '') + '" id="' + NS + '-inj-on">回灌主线</span><span class="lz-pill' + (c.inject === false ? ' on' : '') + '" id="' + NS + '-inj-off">不回灌</span></div>' +
         '</div>' +
         '<div class="lz-card"><h3>记录</h3><p>聊天记录存在当前聊天的变量里，换聊天各自独立。</p>' +
@@ -610,7 +773,7 @@
     function readForm() {
       var on = srcBox.querySelector('.lz-pill.on');
       return { apiurl: $('f-url').value.trim(), key: $('f-key').value.trim(), model: $('f-model').value.trim(),
-        source: on ? on.dataset.v : 'openai', temperature: DEFAULT_CFG.temperature, inject: cfg.inject !== false };
+        source: on ? on.dataset.v : 'openai', temperature: DEFAULT_CFG.temperature, inject: cfg.inject !== false, floor: cfg.floor !== false };
     }
     function note(t, cls) { var n = $('note'); n.textContent = t; n.className = 'lz-note ' + (cls || ''); }
     $('b-save').addEventListener('click', function () { saveCfg(readForm()); note('已保存', 'ok'); });
@@ -640,11 +803,13 @@
         note(txt ? '通了（' + ((Date.now() - t0) / 1000).toFixed(1) + 's）：' + txt.trim().slice(0, 40) : '有响应但内容为空', txt ? 'ok' : 'bad');
       } catch (e) { note('失败：' + (e && e.message ? e.message : e), 'bad'); }
     });
+    $('fl-on').addEventListener('click', function () { var f = readForm(); f.floor = true; saveCfg(f); $('fl-on').classList.add('on'); $('fl-off').classList.remove('on'); });
+    $('fl-off').addEventListener('click', function () { var f = readForm(); f.floor = false; saveCfg(f); $('fl-off').classList.add('on'); $('fl-on').classList.remove('on'); });
     $('inj-on').addEventListener('click', function () { var f = readForm(); f.inject = true; saveCfg(f); $('inj-on').classList.add('on'); $('inj-off').classList.remove('on'); refreshInjection(); });
     $('inj-off').addEventListener('click', function () { var f = readForm(); f.inject = false; saveCfg(f); $('inj-off').classList.add('on'); $('inj-on').classList.remove('on'); refreshInjection(); });
     $('b-clear').addEventListener('click', async function () {
       if (!VIEW.confirm('清空这个聊天里的全部手机记录？')) return;
-      await updatePhone(function (p) { Object.keys(p).forEach(function (k) { if (k.indexOf('h_') === 0) delete p[k]; }); });
+      await updatePhone(function (p) { Object.keys(p).forEach(function (k) { if (/^(h_|q_|f_)/.test(k)) delete p[k]; }); });
       refreshInjection(); note('已清空', 'ok');
     });
   }
@@ -677,12 +842,20 @@
     $('gear').addEventListener('click', function () { showScreen('settings'); });
   }
 
-  function renderChatUI(title, sub, chatId, sendFn) {
+  function renderChatUI(title, sub, chatId, queueFn, sendFn) {
     body().innerHTML =
       '<div class="lz-nav"><div class="lz-back" id="' + NS + '-back">‹</div><h2>' + esc(title) + '</h2><small>' + esc(sub || '') + '</small></div>' +
       '<div class="lz-chat" id="' + NS + '-chat"></div>' +
       '<div class="lz-stk" id="' + NS + '-stk"><div class="lz-grid" id="' + NS + '-grid"></div></div>' +
-      '<div class="lz-inbar"><div class="lz-ib" id="' + NS + '-stkbtn" title="表情包">\u{1F600}</div>' +
+      '<div class="lz-more" id="' + NS + '-more">' +
+        '<div class="lz-tabs"><div class="lz-tab on" data-t="rp">\u{1F9E7} 红包</div><div class="lz-tab" data-t="vc">\u{1F3A4} 语音</div></div>' +
+        '<div class="lz-form on" data-f="rp"><input id="' + NS + '-rp-amt" inputmode="numeric" placeholder="金额（元）" autocomplete="off" name="lz-rp-amt">' +
+          '<input id="' + NS + '-rp-note" placeholder="留言（可不填）" maxlength="20" autocomplete="off" name="lz-rp-note">' +
+          '<button class="lz-go" id="' + NS + '-rp-go">塞钱进红包</button></div>' +
+        '<div class="lz-form" data-f="vc"><textarea id="' + NS + '-vc-text" placeholder="想说的话打在这里，会变成一条语音" autocomplete="off" name="lz-vc-text"></textarea>' +
+          '<button class="lz-go vc" id="' + NS + '-vc-go">发送语音</button><div class="lz-tip">对方看到的是语音条，时长按字数算；点语音条能展开文字</div></div>' +
+      '</div>' +
+      '<div class="lz-inbar"><div class="lz-plus" id="' + NS + '-plus" title="红包 / 语音">＋</div><div class="lz-ib" id="' + NS + '-stkbtn" title="表情包">\u{1F600}</div>' +
         '<textarea class="lz-in" id="' + NS + '-in" rows="1" placeholder="发消息…" autocomplete="off" name="lz-msg"></textarea>' +
         '<div class="lz-send' + (generating ? ' busy' : '') + '" id="' + NS + '-send">➤</div></div>';
     renderMessages(chatId);
@@ -690,21 +863,56 @@
     $('back').addEventListener('click', function () { showScreen('home'); });
     $('send').addEventListener('click', sendFn);
     $('stkbtn').addEventListener('click', function () {
+      closeMore();
       stickerOpen = !stickerOpen;
       $('stk').classList.toggle('open', stickerOpen);
       $('stkbtn').classList.toggle('on', stickerOpen);
     });
+    $('plus').addEventListener('click', function () {
+      var on = !$('more').classList.contains('open');
+      closeStickers();
+      $('more').classList.toggle('open', on); $('plus').classList.toggle('on', on);
+    });
+    $('more').querySelectorAll('.lz-tab').forEach(function (t) {
+      t.addEventListener('click', function () {
+        $('more').querySelectorAll('.lz-tab').forEach(function (q) { q.classList.toggle('on', q === t); });
+        $('more').querySelectorAll('.lz-form').forEach(function (f) { f.classList.toggle('on', f.dataset.f === t.dataset.t); });
+      });
+    });
+    $('rp-go').addEventListener('click', function () {
+      var amt = Math.round(parseFloat($('rp-amt').value));
+      if (!amt || amt < 1) { $('rp-amt').focus(); return; }
+      queueRich(chatId, { kind: 'redpacket', amount: Math.min(amt, 20000), note: ($('rp-note').value || '恭喜发财').trim().slice(0, 20), opened: false, text: '' });
+      $('rp-amt').value = ''; $('rp-note').value = ''; closeMore();
+    });
+    $('vc-go').addEventListener('click', function () {
+      var t = $('vc-text').value.trim(); if (!t) { $('vc-text').focus(); return; }
+      queueRich(chatId, { kind: 'voice', text: t.slice(0, 200), secs: voiceSecs(t) });
+      $('vc-text').value = ''; closeMore();
+    });
+    // 气泡交互：点对方红包 = 领取；点语音条 = 播放动画 + 展开文字
+    $('chat').addEventListener('click', function (e) {
+      var rp = e.target.closest && e.target.closest('.lz-bub.rp');
+      if (rp && !rp.classList.contains('opened') && !rp.closest('.lz-msg').classList.contains('me')) { claimNpcPacket(chatId, rp); return; }
+      var vc = e.target.closest && e.target.closest('.lz-bub.vc');
+      if (vc) {
+        vc.classList.add('playing'); setTimeout(function () { vc.classList.remove('playing'); }, 1800);
+        var tx = vc.nextElementSibling; if (tx && tx.classList.contains('vc-text')) tx.classList.toggle('show');
+      }
+    });
     var input = $('in');
-    input.addEventListener('keydown', function (e) { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendFn(); } });
+    // 回车 = 攒一条（多条气泡），➤ = 把攒的一起发出去让对方回；Shift+回车换行
+    input.addEventListener('keydown', function (e) { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); queueFn(); } });
     input.addEventListener('input', function () { input.style.height = 'auto'; input.style.height = Math.min(input.scrollHeight, 96) + 'px'; });
+    syncSendBtn(chatId);
   }
   function renderChat(cid) {
     var c = findContact(cid); if (!c) return showScreen('home');
-    renderChatUI(c.name, c.relation, cid, function () { sendPrivate(cid); });
+    renderChatUI(c.name, c.relation, cid, function () { queueText(cid); }, function () { sendPrivate(cid); });
   }
   function renderGroup(gid) {
     var g = findGroup(gid); if (!g) return showScreen('home');
-    renderChatUI(g.name, (g.members.length + 1) + ' 人', 'g_' + gid, function () { sendGroup(gid); });
+    renderChatUI(g.name, (g.members.length + 1) + ' 人', 'g_' + gid, function () { queueText('g_' + gid); }, function () { sendGroup(gid); });
   }
 
   function renderMessages(chatId) {
@@ -718,9 +926,21 @@
     var c = me ? null : findContact(m.sender);
     var av = m.avatar ? 'background-image:url(\'' + catUrl(m.avatar) + '\')' : '';
     var sn = (!me && m.senderName) ? '<div class="lz-sn" style="color:' + (c ? c.theme : '#6a5d50') + '">' + esc(m.senderName) + '</div>' : '';
-    var bqb = m.text.match(/^<bqb>(.*?)<\/bqb>$/), inner;
-    if (bqb && STICKERS[bqb[1]]) inner = '<div class="lz-bub stk"><img src="' + catUrl(STICKERS[bqb[1]]) + '" alt="' + esc(bqb[1]) + '" loading="lazy"></div>';
-    else inner = '<div class="lz-bub">' + esc(bqbToText(m.text)) + '</div>';
+    if (m.kind === 'claim') {
+      return '<div class="lz-sys"><span>' + esc(me ? '你' : (m.senderName || '对方')) + '领取了' + (me ? '对方' : '你') + '的红包</span></div>';
+    }
+    var bqb = (m.text || '').match(/^<bqb>(.*?)<\/bqb>$/), inner;
+    if (m.kind === 'redpacket') {
+      inner = '<div class="lz-bub rp' + (m.opened ? ' opened' : '') + '" data-rp="' + (m.id || '') + '">' +
+        '<div class="rp-top"><span class="rp-ico">\u{1F9E7}</span><div class="rp-txt"><div class="rp-note">' + esc(m.note || '恭喜发财') + '</div>' +
+        '<div class="rp-st">' + (m.opened ? '已领取' : (me ? '等待对方领取' : '点击领取')) + '</div></div></div>' +
+        '<div class="rp-foot">微信红包' + (m.opened || me ? ' · ¥' + esc(m.amount) : '') + '</div></div>';
+    } else if (m.kind === 'voice') {
+      var w = Math.min(180, 70 + (m.secs || 1) * 4);
+      inner = '<div class="lz-bub vc" style="width:' + w + 'px" data-vc="1"><span class="vc-play">▶</span><span class="vc-wave"><i></i><i></i><i></i><i></i><i></i></span><span class="vc-sec">' + (m.secs || 1) + '″</span></div>' +
+        '<div class="vc-text">' + esc(m.text || '') + '</div>';
+    } else if (bqb && STICKERS[bqb[1]]) inner = '<div class="lz-bub stk"><img src="' + catUrl(STICKERS[bqb[1]]) + '" alt="' + esc(bqb[1]) + '" loading="lazy"></div>';
+    else inner = '<div class="lz-bub">' + esc(bqbToText(m.text || '')) + '</div>';
     return '<div class="lz-msg' + (me ? ' me' : '') + '"><div class="lz-ma" style="' + av + '"></div><div class="lz-mb">' + sn + inner +
       '<div class="lz-mt">' + esc(m.time || '') + '</div></div></div>';
   }
@@ -740,6 +960,7 @@
     grid.querySelectorAll('.lz-cell').forEach(function (el) { el.addEventListener('click', function () { sendSticker(el.dataset.n); }); });
   }
   function closeStickers() { stickerOpen = false; var s = $('stk'), b = $('stkbtn'); if (s) s.classList.remove('open'); if (b) b.classList.remove('on'); }
+  function closeMore() { var m = $('more'), p = $('plus'); if (m) m.classList.remove('open'); if (p) p.classList.remove('on'); }
   function setBusy(on) { generating = on; var s = $('send'); if (s) s.classList.toggle('busy', on); }
 
   // ══════════════════════════════════════
@@ -749,7 +970,7 @@
   function takeInput() {
     var input = $('in'); var t = (input ? input.value : '').trim();
     if (!t) return '';
-    input.value = ''; input.style.height = 'auto'; closeStickers();
+    input.value = ''; input.style.height = 'auto'; closeStickers(); closeMore();
     return t;
   }
   function pushUser(chatId, text) {
@@ -758,14 +979,62 @@
     hist.push(m); appendMsg(m);
     return hist;
   }
-  function noteArrival() { if (!isOpen()) { unread++; syncBadge(); } }
+  function noteArrival() {
+    try { if (navigator.vibrate) navigator.vibrate(isOpen() ? 12 : [30, 40, 30]); } catch (e) {}
+    if (!isOpen()) { unread++; syncBadge(); unsnap(); snapSoon(5000); }
+  }
+
+  // ─── 攒消息：回车/表情包只入队并落盘，➤ 才触发对方回复（队列状态存变量，脚本重载不丢） ───
+  function pendingCount(chatId) { return phoneData()['q_' + chatId] || 0; }
+  function setPending(chatId, n) { return updatePhone(function (p) { if (n > 0) p['q_' + chatId] = n; else delete p['q_' + chatId]; }); }
+  function syncSendBtn(chatId) {
+    var s = $('send'), i = $('in'); if (!s) return;
+    var n = pendingCount(chatId);
+    s.classList.toggle('has', n > 0); s.setAttribute('data-n', n > 0 ? String(n) : '');
+    if (i) i.placeholder = n > 0 ? '已攒 ' + n + ' 条，点 ➤ 一起发' : '回车攒一条，➤ 发出去';
+  }
+  async function queueText(chatId) {
+    var t = takeInput(); if (!t) return false;
+    var hist = pushUser(chatId, t);
+    await saveHistory(chatId, hist);
+    await setPending(chatId, pendingCount(chatId) + 1);
+    syncSendBtn(chatId);
+    return true;
+  }
+  async function queueRich(chatId, fields) {
+    if (generating) return;
+    var hist = getHistory(chatId);
+    var m = Object.assign({ sender: 'user', time: hhmm(), id: 'u' + Date.now() }, fields);
+    hist.push(m); appendMsg(m);
+    await saveHistory(chatId, hist);
+    await setPending(chatId, pendingCount(chatId) + 1);
+    syncSendBtn(chatId);
+  }
+  // {{user}} 点开对方红包：标记已领取 + 系统行 + 攒一条让对方知道
+  async function claimNpcPacket(chatId, el) {
+    var id = el.getAttribute('data-rp'); if (!id) return;
+    var hist = getHistory(chatId), hit = null;
+    for (var i = hist.length - 1; i >= 0; i--) if (hist[i].id === id) { hit = hist[i]; break; }
+    if (!hit || hit.opened) return;
+    hit.opened = true;
+    el.classList.add('opened');
+    var st = el.querySelector('.rp-st'), ft = el.querySelector('.rp-foot');
+    if (st) st.textContent = '已领取'; if (ft) ft.textContent = '微信红包 · ¥' + hit.amount;
+    var cm = { sender: 'user', kind: 'claim', text: '', time: hhmm() };
+    hist.push(cm); appendMsg(cm);
+    try { if (navigator.vibrate) navigator.vibrate(20); } catch (e) {}
+    await saveHistory(chatId, hist);
+    await setPending(chatId, pendingCount(chatId) + 1);
+    syncSendBtn(chatId);
+  }
 
   async function sendPrivate(cid) {
     if (generating) return;
-    var text = takeInput(); if (!text) return;
+    await queueText(cid);
+    if (!pendingCount(cid)) return;
     var c = findContact(cid);
-    var hist = pushUser(cid, text);
-    await saveHistory(cid, hist);
+    var hist = getHistory(cid);
+    await setPending(cid, 0); syncSendBtn(cid);
     setBusy(true); showTyping();
     try {
       var reply = await generatePrivate(c, hist);
@@ -773,25 +1042,30 @@
       if (!reply) { appendMsg({ sender: 'system', text: c.name + '暂时没回，再发一条试试' }); }
       var lines = reply.split('\n').map(function (l) {
         return l.replace(new RegExp('^\\s*' + c.name + '\\s*[:：]\\s*'), '').replace(/^\s*[-•·]\s*/, '').trim();
-      }).filter(Boolean).slice(0, 4);
+      }).filter(Boolean).slice(0, 5);
       for (var i = 0; i < lines.length; i++) {
-        var m = { sender: c.id, senderName: c.name, avatar: c.avatar, text: lines[i], time: hhmm() };
-        hist.push(m); if (currentChatId === cid && currentScreen === 'chat') appendMsg(m);
+        var m = parseNpcLine(lines[i], c);
+        if (m.kind === 'claim' && !claimLastUserPacket(hist)) continue;   // 没红包可领就当它没说
+        if (m.kind === 'redpacket') m.id = 'n' + Date.now() + i;
+        hist.push(m);
+        if (currentChatId === cid && currentScreen === 'chat') { if (m.kind === 'claim') markUserPacketOpenedDom(); appendMsg(m); }
         noteArrival();
         if (i < lines.length - 1) await sleep(350);
       }
       await saveHistory(cid, hist);
       refreshInjection();
+      await appendFloorBubbles(cid, '与 ' + c.name + ' 的私聊');
     } catch (e) { hideTyping(); appendMsg({ sender: 'system', text: '发送失败，请重试' }); console.log('[霖州手机]', e); }
     setBusy(false);
   }
 
   async function sendGroup(gid) {
     if (generating) return;
-    var text = takeInput(); if (!text) return;
     var g = findGroup(gid), chatId = 'g_' + gid;
-    var hist = pushUser(chatId, text);
-    await saveHistory(chatId, hist);
+    await queueText(chatId);
+    if (!pendingCount(chatId)) return;
+    var hist = getHistory(chatId);
+    await setPending(chatId, 0); syncSendBtn(chatId);
     setBusy(true); showTyping();
     try {
       var reply = await generateGroup(g, hist);
@@ -804,31 +1078,70 @@
         var name = line.substring(0, k).replace(/[\[\]【】]/g, '').trim(), body = line.substring(k + 1).trim();
         if (!body) continue;
         var c = contactByName(name); if (!c) continue;
-        var m = { sender: c.id, senderName: c.name, avatar: c.avatar, text: body, time: hhmm() };
-        hist.push(m); if (currentChatId === gid && currentScreen === 'group') appendMsg(m);
+        var m = parseNpcLine(body, c);
+        if (m.kind === 'claim' && !claimLastUserPacket(hist)) continue;
+        if (m.kind === 'redpacket') m.id = 'n' + Date.now() + i;
+        hist.push(m);
+        if (currentChatId === gid && currentScreen === 'group') { if (m.kind === 'claim') markUserPacketOpenedDom(); appendMsg(m); }
         noteArrival(); got++;
         await sleep(420);
       }
       if (!got) appendMsg({ sender: 'system', text: '群里没人接话，再发一条试试' });
       await saveHistory(chatId, hist);
       refreshInjection();
+      await appendFloorBubbles(chatId, '群聊「' + g.name + '」');
     } catch (e) { hideTyping(); appendMsg({ sender: 'system', text: '发送失败，请重试' }); console.log('[霖州手机]', e); }
     setBusy(false);
   }
 
-  function sendSticker(name) {
+  async function sendSticker(name) {
     if (!currentChatId || generating) return;
     closeStickers();
     var chatId = currentScreen === 'group' ? 'g_' + currentChatId : currentChatId;
     var hist = pushUser(chatId, '<bqb>' + name + '</bqb>');
-    saveHistory(chatId, hist);
+    await saveHistory(chatId, hist);
+    await setPending(chatId, pendingCount(chatId) + 1);
+    syncSendBtn(chatId);
   }
 
   // ─── Prompt ───
   function histText(hist, n) {
     return hist.slice(-n).map(function (m) {
-      return (m.sender === 'user' ? '{{user}}' : (m.senderName || '?')) + '：' + m.text.replace(/<bqb>(.*?)<\/bqb>/g, '[表情包：$1]');
+      var t = m.kind ? msgToText(m) : (m.text || '').replace(/<bqb>(.*?)<\/bqb>/g, '[表情包：$1]');
+      return (m.sender === 'user' ? '{{user}}' : (m.senderName || '?')) + '：' + t;
     }).join('\n');
+  }
+  var RICH_RULES =
+    '- 可以发红包：单独一行写 (红包+金额|留言)，例如 (红包+52|拿去买奶茶)，金额 1～200 的整数；符合人设和情境才发，别滥发\n' +
+    '- 可以发语音：单独一行写 (语音|要说的话)，语音里的话要像嘴上说的，可以更随意\n' +
+    '- {{user}}发了红包而你想收：单独一行写 (领取红包)\n';
+  // 对方输出的一行 → 消息对象（识别红包/语音/领取，其余当文字）
+  function parseNpcLine(line, c) {
+    var m;
+    if ((m = line.match(/^\(?\s*红包\s*\+?\s*(\d+(?:\.\d+)?)\s*(?:[|｜:：]\s*(.*?))?\s*\)?$/))) {
+      return { sender: c.id, senderName: c.name, avatar: c.avatar, kind: 'redpacket', amount: Math.min(200, Math.max(1, Math.round(parseFloat(m[1])))), note: (m[2] || '恭喜发财').slice(0, 20), opened: false, text: '', time: hhmm() };
+    }
+    if ((m = line.match(/^\(?\s*语音\s*[|｜:：+]\s*(.+?)\s*\)?$/))) {
+      return { sender: c.id, senderName: c.name, avatar: c.avatar, kind: 'voice', text: m[1].slice(0, 120), secs: voiceSecs(m[1]), time: hhmm() };
+    }
+    if (/^\(?\s*(领取|收下|拆)红包\s*\)?$/.test(line)) {
+      return { sender: c.id, senderName: c.name, avatar: c.avatar, kind: 'claim', text: '', time: hhmm() };
+    }
+    return { sender: c.id, senderName: c.name, avatar: c.avatar, text: line, time: hhmm() };
+  }
+  // 对方领取时同步改屏幕上那只红包（存档在循环结束才落盘，不能从存档重绘）
+  function markUserPacketOpenedDom() {
+    var list = DOC.querySelectorAll('#' + NS + '-panel .lz-msg.me .lz-bub.rp:not(.opened)');
+    var el = list[list.length - 1]; if (!el) return;
+    el.classList.add('opened');
+    var st = el.querySelector('.rp-st'); if (st) st.textContent = '已领取';
+  }
+  // 对方领取 → 把{{user}}最近一个没被领的红包标成已领取
+  function claimLastUserPacket(hist) {
+    for (var i = hist.length - 1; i >= 0; i--) {
+      if (hist[i].sender === 'user' && hist[i].kind === 'redpacket' && !hist[i].opened) { hist[i].opened = true; return true; }
+    }
+    return false;
   }
   function mainContext() {
     try {
@@ -852,6 +1165,7 @@
       '- 只写' + c.name + '发出的新消息，1～3 条，每条一行，只写消息内容\n' +
       '- 每条不超过 35 字，像真人打字，不复述{{user}}的话\n' +
       '- 想发表情包时单独一行写 <bqb>表情包名</bqb>，可选：' + stickerHint(30) + '\n' +
+      RICH_RULES +
       '- 不要角色名前缀、不要时间戳、不要旁白动作、不要括号里的心理描写\n' +
       '【务必直接输出消息，严禁在开头输出"好的"等废话。】';
     return await phoneGenerate(p);
@@ -869,6 +1183,7 @@
       '- 不必人人都说话，谁会接这句谁说；可以互相接梗、互相拆台\n' +
       '- 每条不超过 35 字，像真人在群里打字\n' +
       '- 想发表情包写「角色名：<bqb>表情包名</bqb>」，可选：' + stickerHint(20) + '\n' +
+      '- 红包写「角色名：(红包+金额|留言)」，语音写「角色名：(语音|内容)」，领{{user}}的红包写「角色名：(领取红包)」；只在合适时用\n' +
       '- 不要生成{{user}}的消息，不要旁白，不要时间戳\n' +
       '【务必直接输出消息，严禁在开头输出"好的"等废话。】';
     return await phoneGenerate(p);
@@ -883,6 +1198,7 @@
     var ev = getButtonEvent(BTN);
     if (typeof eventClearEvent === 'function') eventClearEvent(ev);
     eventOn(ev, function () {
+      clearPos();                                   // 保底按钮 = 复位：拖丢了从这里叫回来
       if (!$('ball')) { ensureMounted(); placeBall(); return; }
       placeBall();
       setOpen(!isOpen());
@@ -897,10 +1213,95 @@
     });
   } catch (e) {}
 
+  // ══════════════════════════════════════
+  //  §10  正文里的聊天气泡：把楼层里的 ```chat 围栏渲染成手机同款气泡（UWU 方案）
+  // ══════════════════════════════════════
+
+  var FLOOR_CSS = [
+    '.lz-bubs{margin:14px 0;padding:0;border:0;background:none;font-size:13.5px;line-height:1.55;',
+    'font-family:-apple-system,"PingFang SC","Microsoft YaHei","Noto Sans SC",sans-serif;--fink:#2a221a;--ffaint:#8a7d70;--fpaper:#fbf7ef;--frose:#F3C7CD;--frose-ink:#5a2a33;--fline:rgba(42,34,26,.14);--fsky:#5B93D6}',
+    '.lz-bubs .bd{display:flex;align-items:center;gap:8px;margin:10px 2px 8px;font-size:10.5px;letter-spacing:1px;color:var(--fsky)}',
+    '.lz-bubs .bd::before,.lz-bubs .bd::after{content:"";flex:1;height:1px;background:var(--fline)}',
+    '.lz-bubs .br{display:flex;align-items:flex-end;gap:8px;margin:7px 0}', '.lz-bubs .br.me{flex-direction:row-reverse}',
+    '.lz-bubs .av{flex:0 0 30px;width:30px;height:30px;border-radius:9px;display:flex;align-items:center;justify-content:center;font-size:13px;line-height:1;',
+    'background:var(--fpaper);border:1px solid var(--fline);color:var(--fink);background-size:cover;background-position:center;overflow:hidden}',
+    '.lz-bubs .br.me .av{background:var(--frose);color:var(--frose-ink);border-color:transparent}',
+    '.lz-bubs .bw{display:flex;flex-direction:column;align-items:flex-start;max-width:76%;min-width:0}', '.lz-bubs .br.me .bw{align-items:flex-end}',
+    '.lz-bubs .bn{font-size:10px;color:var(--ffaint);margin:0 4px 3px}',
+    '.lz-bubs .bb{padding:8px 13px;border-radius:14px;border-bottom-left-radius:4px;background:var(--fpaper);color:var(--fink);border:1px solid var(--fline);',
+    'white-space:pre-wrap;word-break:break-word;overflow-wrap:anywhere}',
+    '.lz-bubs .br.me .bb{border-bottom-left-radius:14px;border-bottom-right-radius:4px;background:var(--frose);color:var(--frose-ink);border-color:transparent}',
+    '.lz-bubs .bs{text-align:center;font-size:10.5px;color:var(--ffaint);margin:7px 0}'
+  ].join('\n');
+
+  function parseBubs(text) {
+    var lines = String(text || '').split('\n'), groups = [], cur = null, real = 0;
+    for (var i = 0; i < lines.length; i++) {
+      var line = lines[i]; if (!line.trim()) continue;
+      if (line.charAt(0) === '#') { cur = { title: line.slice(1).trim(), rows: [] }; groups.push(cur); continue; }
+      if (!cur) { cur = { title: '', rows: [] }; groups.push(cur); }
+      if (line.charAt(0) === '\xB7') { cur.rows.push({ sys: true, text: line.slice(1).trim() }); continue; }
+      var c = line.indexOf(': ');
+      if (c < 1 || c > 32) return null;
+      cur.rows.push({ who: line.slice(0, c), text: line.slice(c + 2) }); real++;
+    }
+    if (!real && !(groups.length && groups[0].title)) return null;
+    return groups.length ? groups : null;
+  }
+  function buildBubs(groups) {
+    var me = userName();
+    var wrap = DOC.createElement('div'); wrap.className = 'lz-bubs';
+    groups.forEach(function (grp) {
+      if (grp.title) { var dv = DOC.createElement('div'); dv.className = 'bd'; dv.textContent = grp.title; wrap.appendChild(dv); }
+      var lastWho = null;
+      grp.rows.forEach(function (row) {
+        if (row.sys) { var sy = DOC.createElement('div'); sy.className = 'bs'; sy.textContent = row.text; wrap.appendChild(sy); lastWho = null; return; }
+        var isMe = row.who === me || row.who === 'User' || row.who === '我';
+        var line = DOC.createElement('div'); line.className = 'br' + (isMe ? ' me' : '');
+        var av = DOC.createElement('div'); av.className = 'av'; av.title = row.who;
+        var ct = isMe ? null : contactByName(row.who);
+        if (ct) av.style.backgroundImage = 'url(\'' + catUrl(ct.avatar) + '\')';
+        else av.textContent = (String(row.who).replace(/[^A-Za-z一-鿿]/g, '')[0] || '\xB7').toUpperCase();
+        if (row.who === lastWho) av.style.visibility = 'hidden';
+        var bw = DOC.createElement('div'); bw.className = 'bw';
+        if (!isMe && row.who !== lastWho) { var nm = DOC.createElement('div'); nm.className = 'bn'; nm.textContent = row.who; if (ct) nm.style.color = ct.theme; bw.appendChild(nm); }
+        var bb = DOC.createElement('div'); bb.className = 'bb'; bb.textContent = row.text;
+        bw.appendChild(bb); line.appendChild(av); line.appendChild(bw); wrap.appendChild(line);
+        lastWho = row.who;
+      });
+    });
+    return wrap;
+  }
+  function renderFloorBubbles() {
+    try {
+      var codes = DOC.querySelectorAll('pre > code');
+      for (var i = 0; i < codes.length; i++) {
+        var codeEl = codes[i], pre = codeEl.parentNode; if (!pre || !pre.parentNode) continue;
+        var cls = codeEl.className || '', txt = codeEl.textContent || '';
+        if (cls.indexOf('chat') === -1 && !/^\s*#.+·\s*(与 .+ 的私聊|群聊「)/.test(txt)) continue;
+        var groups = parseBubs(txt); if (!groups) continue;
+        pre.parentNode.replaceChild(buildBubs(groups), pre);
+      }
+    } catch (e) { console.log('[霖州手机] 气泡渲染异常', e); }
+  }
+  var _bubTimer = null, _bubObs = null;
+  function startFloorObserver() {
+    if (!DOC.getElementById(NS + '-floor-style')) { var fs = DOC.createElement('style'); fs.id = NS + '-floor-style'; fs.textContent = FLOOR_CSS; DOC.head.appendChild(fs); }
+    try {
+      _bubObs = new MutationObserver(function () { clearTimeout(_bubTimer); _bubTimer = setTimeout(function () { _bubTimer = null; renderFloorBubbles(); }, 260); });
+      _bubObs.observe(DOC.getElementById('chat') || DOC.body, { childList: true, subtree: true });
+    } catch (e) {}
+    setTimeout(renderFloorBubbles, 500);
+  }
+
   function cleanup() {
     unmount();
+    try { if (_bubObs) _bubObs.disconnect(); _bubObs = null; } catch (e) {}
+    if (_bubTimer) { clearTimeout(_bubTimer); _bubTimer = null; }
+    var fse = DOC.getElementById(NS + '-floor-style'); if (fse && fse.parentNode) fse.parentNode.removeChild(fse);
     if (clockTimer) { clearInterval(clockTimer); clockTimer = null; }
     if (chatTimer) { clearTimeout(chatTimer); chatTimer = null; }
+    if (snapTimer) { clearTimeout(snapTimer); snapTimer = null; }
     if (vvBound) {
       try { if (VIEW.visualViewport) VIEW.visualViewport.removeEventListener('resize', vvBound); } catch (e) {}
       try { VIEW.removeEventListener('resize', vvBound); } catch (e) {}
@@ -915,6 +1316,7 @@
   window.addEventListener('unload', cleanup);
 
   mount();
+  startFloorObserver();
   refreshInjection();
   console.log('[霖州往事·悬浮手机] v' + VERSION + ' 已加载，壁纸@' + WALL_REF.slice(0, 7));
 })();
