@@ -137,15 +137,34 @@
     return updatePhone(function (p) { p['h_' + chatId] = msgs; });
   }
 
+  // ─── 设置：存浏览器本地（跟卡/聊天无关） ───
+  var CFG_KEY = 'lz_phone_cfg';
+  var DEFAULT_CFG = { apiurl: '', key: '', model: '', source: 'openai', temperature: 1.1, inject: true };
+  function loadCfg() {
+    try { var raw = VIEW.localStorage.getItem(CFG_KEY); if (raw) return Object.assign({}, DEFAULT_CFG, JSON.parse(raw)); } catch (e) {}
+    return Object.assign({}, DEFAULT_CFG);
+  }
+  function saveCfg(c) { cfg = c; try { VIEW.localStorage.setItem(CFG_KEY, JSON.stringify(c)); } catch (e) {} }
+  var cfg = loadCfg();
+  function customApi() {
+    var api = {};
+    if (cfg.apiurl) { api.apiurl = cfg.apiurl.trim(); api.key = (cfg.key || '').trim(); api.source = cfg.source || 'openai'; }
+    if (cfg.model) api.model = cfg.model.trim();
+    if (cfg.temperature !== '' && !isNaN(cfg.temperature)) api.temperature = Number(cfg.temperature);
+    return Object.keys(api).length ? api : null;
+  }
+
   // ─── 副轨生成（不走玩家预设） ───
   async function phoneGenerate(prompt) {
     for (var attempt = 0; attempt < 2; attempt++) {
       try {
-        var r = await generateRaw({
+        var req = {
           ordered_prompts: [{ role: 'system', content: prompt }, { role: 'user', content: '请按要求输出。' }],
           should_silence: true,
           max_chat_history: 0
-        });
+        };
+        var api = customApi(); if (api) req.custom_api = api;
+        var r = await generateRaw(req);
         var txt = typeof r === 'string' ? r : (r && r.content) || '';
         txt = cleanAI(txt);
         if (txt) return txt;
@@ -169,7 +188,7 @@
       out += '【群聊「' + g.name + '」（成员：' + names.join('、') + '、{{user}}）近期聊天 — 仅群成员知晓】\n' + lines.join('\n') + '\n\n';
     });
     try { uninjectPrompts([INJ_ID]); } catch (e) {}
-    if (!out) return;
+    if (!out || cfg.inject === false) return;
     out = '<手机记录>\n' + out.trim() + '\n</手机记录>\n（以上是{{user}}手机里的聊天记录，角色可自然地知道并在正文中带出，但正文绝不复述、不排版这些消息。）';
     try {
       injectPrompts([{ id: INJ_ID, position: 'in_chat', depth: 4, role: 'system', content: out, should_scan: true }]);
@@ -381,7 +400,31 @@
     'box-shadow:0 1px 2px rgba(0,0,0,.06);transition:transform .12s,box-shadow .12s}',
     P + ' .lz-cell:hover{transform:scale(1.07);box-shadow:0 3px 10px rgba(0,0,0,.14)}',
     P + ' .lz-cell img{max-width:88%;max-height:88%;object-fit:contain}',
-    P + ' ::-webkit-scrollbar{width:4px}', P + ' ::-webkit-scrollbar-thumb{background:rgba(42,34,26,.18);border-radius:2px}'
+    P + ' ::-webkit-scrollbar{width:4px}', P + ' ::-webkit-scrollbar-thumb{background:rgba(42,34,26,.18);border-radius:2px}',
+
+    /* ── 设置页 ── */
+    P + ' .lz-gear{width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:16px;color:var(--ink2);flex:none}',
+    P + ' .lz-gear:hover{background:rgba(0,0,0,.06)}',
+    P + ' .lz-card{background:var(--paper);border:1px solid rgba(120,80,40,.10);border-radius:12px;padding:10px 12px;display:flex;flex-direction:column;gap:8px;',
+    'box-shadow:0 1px 0 rgba(255,255,255,.4) inset;-webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px)}',
+    P + ' .lz-card h3{margin:0;font-size:11px;font-weight:700;letter-spacing:.08em;color:var(--ink2)}',
+    P + ' .lz-card p{margin:0;font-size:11px;color:var(--ink3);line-height:1.5}',
+    P + ' .lz-f{display:flex;flex-direction:column;gap:3px}',
+    P + ' .lz-f label{font-size:11px;color:var(--ink2)}',
+    P + ' .lz-f input{height:32px;padding:0 10px;border:1px solid var(--line);border-radius:9px;background:#fff;color:var(--ink);font-size:13px;font-family:inherit;outline:none;',
+    '-webkit-text-fill-color:var(--ink);color-scheme:light;width:100%}',
+    P + ' .lz-f input:focus{border-color:var(--sky)}',
+    P + ' .lz-pills{display:flex;flex-wrap:wrap;gap:6px}',
+    P + ' .lz-pill{padding:5px 11px;border-radius:999px;font-size:12px;cursor:pointer;background:#fff;border:1px solid var(--line);color:var(--ink2);max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+    P + ' .lz-pill.on{background:var(--sky);border-color:var(--sky);color:#fff}',
+    P + ' .lz-btns{display:flex;gap:8px;flex-wrap:wrap}',
+    P + ' .lz-btn{flex:1;min-width:90px;height:34px;border-radius:10px;border:1px solid var(--line);background:#fff;color:var(--ink);font-size:13px;cursor:pointer;',
+    'display:flex;align-items:center;justify-content:center;font-family:inherit}',
+    P + ' .lz-btn.pri{background:linear-gradient(135deg,#7BAFD4,#5B93D6);color:#fff;border-color:transparent}',
+    P + ' .lz-btn.warn{color:#b5424f}',
+    P + ' .lz-btn:disabled{opacity:.5}',
+    P + ' .lz-note{font-size:11.5px;min-height:16px;color:var(--ink2)}',
+    P + ' .lz-note.ok{color:var(--leaf)}', P + ' .lz-note.bad{color:#b5424f}'
   ].join('\n');
 
   // ══════════════════════════════════════
@@ -525,13 +568,90 @@
     if (name === 'home') renderHome();
     else if (name === 'chat') renderChat(id);
     else if (name === 'group') renderGroup(id);
+    else if (name === 'settings') renderSettings();
     else showLock();
+  }
+
+  function renderSettings() {
+    var c = cfg;
+    var src = c.source || 'openai';
+    body().innerHTML =
+      '<div class="lz-nav"><div class="lz-back" id="' + NS + '-back">‹</div><h2>设置</h2></div>' +
+      '<div class="lz-list" id="' + NS + '-set">' +
+        '<div class="lz-card"><h3>手机专用 API</h3>' +
+          '<p>留空 = 用酒馆当前接的模型。填了就走这里，手机聊天不占主线额度。</p>' +
+          '<div class="lz-f"><label>API 地址</label><input id="' + NS + '-f-url" placeholder="https://api.example.com/v1" value="' + esc(c.apiurl || '') + '" autocomplete="off" name="lz-api-url"></div>' +
+          '<div class="lz-f"><label>密钥</label><input id="' + NS + '-f-key" type="password" placeholder="sk-…" value="' + esc(c.key || '') + '" autocomplete="new-password" name="lz-api-key"></div>' +
+          '<div class="lz-f"><label>接口类型</label><div class="lz-pills" id="' + NS + '-f-src">' +
+            ['openai:OpenAI 兼容', 'claude:Claude', 'custom:自定义'].map(function (s) { var p = s.split(':'); return '<span class="lz-pill' + (src === p[0] ? ' on' : '') + '" data-v="' + p[0] + '">' + p[1] + '</span>'; }).join('') +
+          '</div></div>' +
+          '<div class="lz-f"><label>模型</label><input id="' + NS + '-f-model" placeholder="留空用默认" value="' + esc(c.model || '') + '" autocomplete="off" name="lz-api-model"></div>' +
+          '<div class="lz-pills" id="' + NS + '-f-models"></div>' +
+          '<div class="lz-f"><label>温度</label><input id="' + NS + '-f-temp" inputmode="decimal" value="' + esc(c.temperature) + '" autocomplete="off" name="lz-api-temp"></div>' +
+          '<div class="lz-btns"><button class="lz-btn" id="' + NS + '-b-models">拉取模型列表</button><button class="lz-btn" id="' + NS + '-b-test">测试</button><button class="lz-btn pri" id="' + NS + '-b-save">保存</button></div>' +
+          '<div class="lz-note" id="' + NS + '-note"></div>' +
+        '</div>' +
+        '<div class="lz-card"><h3>主线联动</h3>' +
+          '<p>开着：手机里聊的内容会悄悄告诉主线 AI（带「仅当事人知晓」框），正文里角色会自然接上。关掉：手机和正文互不知情。</p>' +
+          '<div class="lz-pills"><span class="lz-pill' + (c.inject !== false ? ' on' : '') + '" id="' + NS + '-inj-on">回灌主线</span><span class="lz-pill' + (c.inject === false ? ' on' : '') + '" id="' + NS + '-inj-off">不回灌</span></div>' +
+        '</div>' +
+        '<div class="lz-card"><h3>记录</h3><p>聊天记录存在当前聊天的变量里，换聊天各自独立。</p>' +
+          '<div class="lz-btns"><button class="lz-btn warn" id="' + NS + '-b-clear">清空本聊天的手机记录</button></div>' +
+        '</div>' +
+      '</div>';
+
+    $('back').addEventListener('click', function () { showScreen('home'); });
+    var srcBox = $('f-src');
+    srcBox.querySelectorAll('.lz-pill').forEach(function (p) {
+      p.addEventListener('click', function () { srcBox.querySelectorAll('.lz-pill').forEach(function (q) { q.classList.remove('on'); }); p.classList.add('on'); });
+    });
+    function readForm() {
+      var on = srcBox.querySelector('.lz-pill.on');
+      var t = parseFloat($('f-temp').value);
+      return { apiurl: $('f-url').value.trim(), key: $('f-key').value.trim(), model: $('f-model').value.trim(),
+        source: on ? on.dataset.v : 'openai', temperature: isNaN(t) ? 1.1 : t, inject: cfg.inject !== false };
+    }
+    function note(t, cls) { var n = $('note'); n.textContent = t; n.className = 'lz-note ' + (cls || ''); }
+    $('b-save').addEventListener('click', function () { saveCfg(readForm()); note('已保存', 'ok'); });
+    $('b-models').addEventListener('click', async function () {
+      var f = readForm(); if (!f.apiurl) { note('先填 API 地址', 'bad'); return; }
+      note('拉取中…');
+      try {
+        var list = await getModelList({ apiurl: f.apiurl, key: f.key });
+        var box = $('f-models'); box.innerHTML = '';
+        if (!list || !list.length) { note('这个地址没返回模型列表，手填也行', 'bad'); return; }
+        list.slice(0, 60).forEach(function (m) {
+          var p = DOC.createElement('span'); p.className = 'lz-pill'; p.textContent = m; p.title = m;
+          p.addEventListener('click', function () { $('f-model').value = m; box.querySelectorAll('.lz-pill').forEach(function (q) { q.classList.remove('on'); }); p.classList.add('on'); });
+          box.appendChild(p);
+        });
+        note('共 ' + list.length + ' 个模型，点一个填入', 'ok');
+      } catch (e) { note('拉取失败：' + (e && e.message ? e.message : e), 'bad'); }
+    });
+    $('b-test').addEventListener('click', async function () {
+      saveCfg(readForm()); note('测试中…');
+      var t0 = Date.now();
+      try {
+        var req = { ordered_prompts: [{ role: 'system', content: '只回复两个字：收到' }, { role: 'user', content: '在吗' }], should_silence: true, max_chat_history: 0 };
+        var api = customApi(); if (api) req.custom_api = api;
+        var r = await generateRaw(req);
+        var txt = typeof r === 'string' ? r : (r && r.content) || '';
+        note(txt ? '通了（' + ((Date.now() - t0) / 1000).toFixed(1) + 's）：' + txt.trim().slice(0, 40) : '有响应但内容为空', txt ? 'ok' : 'bad');
+      } catch (e) { note('失败：' + (e && e.message ? e.message : e), 'bad'); }
+    });
+    $('inj-on').addEventListener('click', function () { var f = readForm(); f.inject = true; saveCfg(f); $('inj-on').classList.add('on'); $('inj-off').classList.remove('on'); refreshInjection(); });
+    $('inj-off').addEventListener('click', function () { var f = readForm(); f.inject = false; saveCfg(f); $('inj-off').classList.add('on'); $('inj-on').classList.remove('on'); refreshInjection(); });
+    $('b-clear').addEventListener('click', async function () {
+      if (!VIEW.confirm('清空这个聊天里的全部手机记录？')) return;
+      await updatePhone(function (p) { Object.keys(p).forEach(function (k) { if (k.indexOf('h_') === 0) delete p[k]; }); });
+      refreshInjection(); note('已清空', 'ok');
+    });
   }
 
   function preview(t) { return t.replace(/<bqb>(.*?)<\/bqb>/g, '[表情]').substring(0, 28); }
 
   function renderHome() {
-    var h = '<div class="lz-nav"><h2>微信</h2><small>' + (CONTACTS.length + GROUPS.length) + ' 个会话</small></div><div class="lz-list">';
+    var h = '<div class="lz-nav"><h2>微信</h2><small>' + (CONTACTS.length + GROUPS.length) + ' 个会话</small><div class="lz-gear" id="' + NS + '-gear" title="设置">⚙</div></div><div class="lz-list">';
     h += '<div class="lz-sec">群聊</div>';
     GROUPS.forEach(function (g) {
       var hist = getHistory('g_' + g.id), last = hist[hist.length - 1];
@@ -553,6 +673,7 @@
     body().querySelectorAll('.lz-item').forEach(function (el) {
       el.addEventListener('click', function () { showScreen(el.dataset.a, el.dataset.id); });
     });
+    $('gear').addEventListener('click', function () { showScreen('settings'); });
   }
 
   function renderChatUI(title, sub, chatId, sendFn) {
