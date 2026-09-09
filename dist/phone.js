@@ -991,7 +991,7 @@
     var s = $('send'), i = $('in'); if (!s) return;
     var n = pendingCount(chatId);
     s.classList.toggle('has', n > 0); s.setAttribute('data-n', n > 0 ? String(n) : '');
-    if (i) i.placeholder = n > 0 ? '已攒 ' + n + ' 条，点 ➤ 一起发' : '回车攒一条，➤ 发出去';
+    if (i) i.placeholder = n > 0 ? '已攒 ' + n + ' 条 · ➤ 发' : '回车攒一条 · ➤ 发';
   }
   async function queueText(chatId) {
     var t = takeInput(); if (!t) return false;
