@@ -7,6 +7,7 @@
 (function () {
   'use strict';
 
+  var VERSION = '1.2.0';
   var NS = 'lz-phone';
   var BTN = '\u{1F4F1}手机';
   var CATBOX = 'https://files.catbox.moe/';
@@ -22,7 +23,9 @@
 
   // ─── 壁纸：封面（jsDelivr 多域备胎，全挂则退油画渐变） ───
   var WALL_REPO = 'fannnnnnn5822/linzhou-phone';
+  // 在线版：加载器把本次拉脚本用的提交号放在 window.__LZ_PHONE_REF__，壁纸跟着同一版走；离线版退回固定提交号
   var WALL_REF = '41de1d84f16d485216a3c54416fb6778c064d905';
+  try { var _lr = window.__LZ_PHONE_REF__; if (_lr && /^[A-Za-z0-9._-]{4,60}$/.test(String(_lr))) WALL_REF = String(_lr); } catch (e) {}
   var WALL_SRCS = [
     'https://cdn.jsdelivr.net/gh/' + WALL_REPO + '@' + WALL_REF + '/cover.jpg',
     'https://testingcf.jsdelivr.net/gh/' + WALL_REPO + '@' + WALL_REF + '/cover.jpg',
@@ -913,5 +916,5 @@
 
   mount();
   refreshInjection();
-  console.log('[霖州往事·悬浮手机] v1.1 已加载');
+  console.log('[霖州往事·悬浮手机] v' + VERSION + ' 已加载，壁纸@' + WALL_REF.slice(0, 7));
 })();
