@@ -587,7 +587,6 @@
           '</div></div>' +
           '<div class="lz-f"><label>模型</label><input id="' + NS + '-f-model" placeholder="留空用默认" value="' + esc(c.model || '') + '" autocomplete="off" name="lz-api-model"></div>' +
           '<div class="lz-pills" id="' + NS + '-f-models"></div>' +
-          '<div class="lz-f"><label>温度</label><input id="' + NS + '-f-temp" inputmode="decimal" value="' + esc(c.temperature) + '" autocomplete="off" name="lz-api-temp"></div>' +
           '<div class="lz-btns"><button class="lz-btn" id="' + NS + '-b-models">拉取模型列表</button><button class="lz-btn" id="' + NS + '-b-test">测试</button><button class="lz-btn pri" id="' + NS + '-b-save">保存</button></div>' +
           '<div class="lz-note" id="' + NS + '-note"></div>' +
         '</div>' +
@@ -607,9 +606,8 @@
     });
     function readForm() {
       var on = srcBox.querySelector('.lz-pill.on');
-      var t = parseFloat($('f-temp').value);
       return { apiurl: $('f-url').value.trim(), key: $('f-key').value.trim(), model: $('f-model').value.trim(),
-        source: on ? on.dataset.v : 'openai', temperature: isNaN(t) ? 1.1 : t, inject: cfg.inject !== false };
+        source: on ? on.dataset.v : 'openai', temperature: DEFAULT_CFG.temperature, inject: cfg.inject !== false };
     }
     function note(t, cls) { var n = $('note'); n.textContent = t; n.className = 'lz-note ' + (cls || ''); }
     $('b-save').addEventListener('click', function () { saveCfg(readForm()); note('已保存', 'ok'); });
