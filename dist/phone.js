@@ -7,7 +7,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '1.5.4';
+  var VERSION = '1.5.5';
   var NS = 'lz-phone';
   var BTN = '\u{1F4F1}手机';
   var CATBOX = 'https://files.catbox.moe/';
@@ -339,7 +339,18 @@
       if (!l.trim() || JUNK_LINE.test(l) || TAIL_LINE.test(l) || /^\s*<[a-z_]/i.test(l)) { i--; continue; }
       break;
     }
-    // 尾巴前面那一行如果是它的开标签（<status>），也算尾巴
+    // 尾巴里有闭标签（</status>）→ 往上找到它的开标签，整块都算尾巴。不然气泡会插进 <status>…</status> 中间，把卡的状态栏切成两半
+    var tailTxt = lines.slice(i).join('\n');
+    var closers = tailTxt.match(/<\/([a-z_][\w-]*)>/gi) || [];
+    closers.forEach(function (ct) {
+      var nm = ct.replace(/[<\/>]/g, '');
+      var openRe = new RegExp('<' + nm + '(\\s|>)', 'i');
+      for (var k = i - 1; k >= 0; k--) {
+        if (openRe.test(lines[k])) { i = k; break; }
+      }
+    });
+    // 尾巴前面的空行也一并归尾巴
+    while (i > 0 && !lines[i - 1].trim()) i--;
     return { body: lines.slice(0, i).join('\n').replace(/\s+$/, ''), tail: lines.slice(i).join('\n').replace(/^\s+/, '') };
   }
   async function appendFloorBubbles(chatId, title) {
