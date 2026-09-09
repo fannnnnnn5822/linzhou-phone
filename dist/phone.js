@@ -7,7 +7,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '1.3.0';
+  var VERSION = '1.4.0';
   var NS = 'lz-phone';
   var BTN = '\u{1F4F1}手机';
   var CATBOX = 'https://files.catbox.moe/';
@@ -118,6 +118,7 @@
     if (m.kind === 'redpacket') return '[发了一个微信红包 ¥' + m.amount + (m.note ? '，留言：' + m.note : '') + (m.opened ? '（已被领取）' : '') + ']';
     if (m.kind === 'voice') return '[语音 ' + (m.secs || 1) + '″]' + m.text;
     if (m.kind === 'claim') return '[领取了对方的红包]';
+    if (m.kind === 'recall') return '[撤回了一条消息]';
     return bqbToText(m.text || '');
   }
   function voiceSecs(t) { return Math.max(1, Math.min(60, Math.round((t || '').replace(/\s/g, '').length / 3.5))); }
@@ -844,7 +845,8 @@
 
   function renderChatUI(title, sub, chatId, queueFn, sendFn) {
     body().innerHTML =
-      '<div class="lz-nav"><div class="lz-back" id="' + NS + '-back">‹</div><h2>' + esc(title) + '</h2><small>' + esc(sub || '') + '</small></div>' +
+      '<div class="lz-nav"><div class="lz-back" id="' + NS + '-back">‹</div><h2>' + esc(title) + '</h2><small>' + esc(sub || '') + '</small>' +
+        '<div class="lz-gear" id="' + NS + '-reroll" title="重新生成对方最近一轮回复">\u{1F504}</div></div>' +
       '<div class="lz-chat" id="' + NS + '-chat"></div>' +
       '<div class="lz-stk" id="' + NS + '-stk"><div class="lz-grid" id="' + NS + '-grid"></div></div>' +
       '<div class="lz-more" id="' + NS + '-more">' +
@@ -890,14 +892,25 @@
       queueRich(chatId, { kind: 'voice', text: t.slice(0, 200), secs: voiceSecs(t) });
       $('vc-text').value = ''; closeMore();
     });
-    // 气泡交互：点对方红包 = 领取；点语音条 = 播放动画 + 展开文字
+    $('reroll').addEventListener('click', function () {
+      if (generating) return;
+      if (!VIEW.confirm('重新生成对方最近一轮回复？')) return;
+      rerollLast(chatId, chatId.indexOf('g_') === 0);
+    });
+    // 气泡交互：点对方红包 = 领取；点语音条 = 播放动画 + 展开文字；点自己的气泡 = 撤回
     $('chat').addEventListener('click', function (e) {
       var rp = e.target.closest && e.target.closest('.lz-bub.rp');
-      if (rp && !rp.classList.contains('opened') && !rp.closest('.lz-msg').classList.contains('me')) { claimNpcPacket(chatId, rp); return; }
+      var row = e.target.closest && e.target.closest('.lz-msg');
+      var mine = row && row.classList.contains('me');
+      if (rp && !rp.classList.contains('opened') && !mine) { claimNpcPacket(chatId, rp); return; }
       var vc = e.target.closest && e.target.closest('.lz-bub.vc');
       if (vc) {
         vc.classList.add('playing'); setTimeout(function () { vc.classList.remove('playing'); }, 1800);
         var tx = vc.nextElementSibling; if (tx && tx.classList.contains('vc-text')) tx.classList.toggle('show');
+        if (!mine) return;
+      }
+      if (mine && row.dataset.mid && e.target.closest('.lz-bub')) {
+        if (VIEW.confirm('撤回这条消息？')) recallMsg(chatId, row.dataset.mid);
       }
     });
     var input = $('in');
@@ -929,6 +942,9 @@
     if (m.kind === 'claim') {
       return '<div class="lz-sys"><span>' + esc(me ? '你' : (m.senderName || '对方')) + '领取了' + (me ? '对方' : '你') + '的红包</span></div>';
     }
+    if (m.kind === 'recall') {
+      return '<div class="lz-sys"><span>' + esc(me ? '你' : (m.senderName || '对方')) + '撤回了一条消息</span></div>';
+    }
     var bqb = (m.text || '').match(/^<bqb>(.*?)<\/bqb>$/), inner;
     if (m.kind === 'redpacket') {
       inner = '<div class="lz-bub rp' + (m.opened ? ' opened' : '') + '" data-rp="' + (m.id || '') + '">' +
@@ -941,7 +957,7 @@
         '<div class="vc-text">' + esc(m.text || '') + '</div>';
     } else if (bqb && STICKERS[bqb[1]]) inner = '<div class="lz-bub stk"><img src="' + catUrl(STICKERS[bqb[1]]) + '" alt="' + esc(bqb[1]) + '" loading="lazy"></div>';
     else inner = '<div class="lz-bub">' + esc(bqbToText(m.text || '')) + '</div>';
-    return '<div class="lz-msg' + (me ? ' me' : '') + '"><div class="lz-ma" style="' + av + '"></div><div class="lz-mb">' + sn + inner +
+    return '<div class="lz-msg' + (me ? ' me' : '') + '" data-mid="' + esc(m.id || '') + '"><div class="lz-ma" style="' + av + '"></div><div class="lz-mb">' + sn + inner +
       '<div class="lz-mt">' + esc(m.time || '') + '</div></div></div>';
   }
   function appendMsg(m) {
@@ -975,7 +991,7 @@
   }
   function pushUser(chatId, text) {
     var hist = getHistory(chatId);
-    var m = { sender: 'user', text: text, time: hhmm() };
+    var m = { sender: 'user', text: text, time: hhmm(), id: 'u' + Date.now() + Math.floor(Math.random() * 1000) };
     hist.push(m); appendMsg(m);
     return hist;
   }
@@ -1032,9 +1048,12 @@
     if (generating) return;
     await queueText(cid);
     if (!pendingCount(cid)) return;
+    await setPending(cid, 0); syncSendBtn(cid);
+    await replyPrivate(cid);
+  }
+  async function replyPrivate(cid) {
     var c = findContact(cid);
     var hist = getHistory(cid);
-    await setPending(cid, 0); syncSendBtn(cid);
     setBusy(true); showTyping();
     try {
       var reply = await generatePrivate(c, hist);
@@ -1061,11 +1080,49 @@
 
   async function sendGroup(gid) {
     if (generating) return;
-    var g = findGroup(gid), chatId = 'g_' + gid;
+    var chatId = 'g_' + gid;
     await queueText(chatId);
     if (!pendingCount(chatId)) return;
-    var hist = getHistory(chatId);
     await setPending(chatId, 0); syncSendBtn(chatId);
+    await replyGroup(gid);
+  }
+  // 🔄 重roll：删掉最后一句{{user}}之后对方说的所有话，重新生成；正文只补写新一轮（水位线推到删完的位置）
+  async function rerollLast(chatId, isGroup) {
+    if (generating) return;
+    var hist = getHistory(chatId), cut = -1;
+    for (var i = hist.length - 1; i >= 0; i--) { if (hist[i].sender === 'user') { cut = i; break; } }
+    if (cut < 0 || cut === hist.length - 1) { appendMsg({ sender: 'system', text: '对方还没回过，先发一条吧' }); return; }
+    hist.forEach(function (m, idx) { if (idx <= cut && m.sender === 'user' && m.kind === 'redpacket') m.opened = false; });
+    var kept = hist.slice(0, cut + 1);
+    await saveHistory(chatId, kept);
+    await updatePhone(function (p) { p['f_' + chatId] = kept.length; });
+    renderMessages(chatId);
+    if (isGroup) await replyGroup(chatId.slice(2)); else await replyPrivate(chatId);
+  }
+  // ↩ 撤回自己的一条：没发出去的 = 删掉 + 原话回输入框；已经发出去的 = 变成「撤回了一条消息」，对方只知道你撤回、不知道内容
+  async function recallMsg(chatId, mid) {
+    if (generating) return;
+    var hist = getHistory(chatId), idx = -1;
+    for (var i = hist.length - 1; i >= 0; i--) { if (hist[i].id === mid) { idx = i; break; } }
+    if (idx < 0) return;
+    var m = hist[idx];
+    if (m.sender !== 'user' || m.kind === 'recall' || m.kind === 'claim' || (m.kind === 'redpacket' && m.opened)) return;
+    var pend = pendingCount(chatId), unsent = idx >= hist.length - pend;
+    if (unsent) {
+      hist.splice(idx, 1);
+      await saveHistory(chatId, hist);
+      await setPending(chatId, Math.max(0, pend - 1));
+      var inp = $('in'); if (inp && !m.kind && m.text && !/^<bqb>/.test(m.text)) { inp.value = m.text; inp.focus(); }
+    } else {
+      hist[idx] = { sender: 'user', kind: 'recall', text: '', time: hhmm(), id: m.id };
+      await saveHistory(chatId, hist);
+      await setPending(chatId, pend + 1);
+    }
+    renderMessages(chatId); syncSendBtn(chatId);
+  }
+  async function replyGroup(gid) {
+    var g = findGroup(gid), chatId = 'g_' + gid;
+    var hist = getHistory(chatId);
     setBusy(true); showTyping();
     try {
       var reply = await generateGroup(g, hist);
