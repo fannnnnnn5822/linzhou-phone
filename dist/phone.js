@@ -147,7 +147,7 @@
   function voiceSecs(t) { return Math.max(1, Math.min(60, Math.round((t || '').replace(/\s/g, '').length / 3.5))); }
   // 玩家预设（Horae/Mortal 系）会命令模型在一切输出末尾追加状态栏字段，副轨也逃不掉（SB 发卡日验尸过）。
   // 解析侧是唯一可靠的防线：认出第一条字段行，从它开始整段砍掉；字段词表尽量全。
-  var JUNK_LINE = /^\s*[\[\(（【<]?\s*(npc|affection|time|location|atmosphere|characters?|costume|clothes|outfit|event|agenda|item|items|summary|date|mood|weather|scene|status|state|thought|thoughts|relationship|favor|人物|角色|事件|地点|时间|氛围|气氛|服装|着装|穿着|状态|心情|情绪|天气|场景|物品|日程|好感|好感度|关系|备注|总结)\s*[:：=]/i;
+  var JUNK_LINE = /^\s*[\[\(（【<]?\s*(npc|affection|time|location|atmosphere|characters?|costume|clothes|outfit|event|agenda|item|items|summary|date|mood|weather|scene|status|state|thought|thoughts|relationship|favor|人物|角色|事件|地点|时间|氛围|气氛|服装|着装|穿着|状态|心情|情绪|天气|场景|物品|日程|好感|好感度|关系|备注|总结)\s*[\]\)）】>]?\s*[:：=]/i;
   function cleanAI(s) {
     var txt = (s || '')
       .replace(/```[\s\S]*?```/g, '')
