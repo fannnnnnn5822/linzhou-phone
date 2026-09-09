@@ -7,7 +7,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '1.4.0';
+  var VERSION = '1.5.0';
   var NS = 'lz-phone';
   var BTN = '\u{1F4F1}手机';
   var CATBOX = 'https://files.catbox.moe/';
@@ -56,7 +56,7 @@
     { id: 'wenjia', name: '闻迦', avatar: 'ppr6j3.jpg', theme: '#8AA37E',
       voice: '沉稳可靠的朋友，说话不急不躁，偶尔冒出冷幽默。观察力强，是旁观者视角。',
       relation: '同学' },
-    { id: 'linsiwan', name: '林思菀', avatar: 'awzjxd.jpeg', theme: '#A88CC2',
+    { id: 'linsiwan', name: '林思莞', aliases: ['林思菀'], avatar: 'awzjxd.jpeg', theme: '#A88CC2',
       voice: '个性独立的短发女生，说话带点酷和距离感，但骨子里温柔。审美独到，偶尔分享艺术相关。',
       relation: '同学' },
     { id: 'jiangmo', name: '蒋默', avatar: 'meuzgh.jpg', theme: '#C07A7A',
@@ -67,12 +67,17 @@
       relation: '同学' }
   ];
 
+  // 不在通讯录里、但会在群里出现的人（班主任等）
+  var EXTRAS = [
+    { id: 'zhangyumin', name: '张裕民', avatar: 'xldq00.jpg', theme: '#7a6a5a', voice: '高三（2）班班主任「老张」，严厉刻板爱说教，刀子嘴豆腐心；群里讨论过火会出面管。' }
+  ];
+  // open:true 的群允许名单外的随机同学/陌生人发言（世界书说班级群和吃瓜群本来就有一堆随机人）
   var GROUPS = [
-    { id: 'fupin', name: '金华苑扶贫小组', icon: '\u{1F3E0}', members: ['zhouyan', 'shenxiyuan'], desc: '三人小群' },
-    { id: 'moyu', name: '霖附摸鱼自留地', icon: '\u{1F41F}', members: ['zhouyan', 'shenxiyuan', 'lufei', 'linxi'], desc: '朋友群' },
-    { id: 'class2', name: '高三（2）班', icon: '\u{1F4DA}',
-      members: ['zhouyan', 'shenxiyuan', 'lufei', 'linxi', 'chenyouyou', 'wenjia', 'linsiwan', 'jiangmo', 'azhe'], desc: '班级群' },
-    { id: 'gossip', name: '霖附吃瓜二手交易市场', icon: '\u{1F349}', members: ['lufei', 'linxi'], desc: '校园百人大群' }
+    { id: 'fupin', name: '金华苑扶贫小组', icon: '\u{1F3E0}', members: ['zhouyan', 'shenxiyuan'], desc: '' },
+    { id: 'moyu', name: '霖附摸鱼自留地', icon: '\u{1F41F}', members: ['zhouyan', 'shenxiyuan', 'lufei', 'linxi'], desc: '' },
+    { id: 'class2', name: '高三（2）班', icon: '\u{1F4DA}', open: true,
+      members: ['zhouyan', 'shenxiyuan', 'lufei', 'linxi', 'chenyouyou', 'wenjia', 'linsiwan', 'jiangmo', 'azhe', 'zhangyumin'], desc: '' },
+    { id: 'gossip', name: '霖附吃瓜二手交易市场', icon: '\u{1F349}', open: true, members: ['lufei', 'linxi'], desc: '' }
   ];
 
   var STICKERS = {
@@ -103,10 +108,28 @@
   //  §2  工具
   // ══════════════════════════════════════
 
-  function findContact(id) { for (var i = 0; i < CONTACTS.length; i++) if (CONTACTS[i].id === id) return CONTACTS[i]; return null; }
+  function findContact(id) {
+    for (var i = 0; i < CONTACTS.length; i++) if (CONTACTS[i].id === id) return CONTACTS[i];
+    for (var j = 0; j < EXTRAS.length; j++) if (EXTRAS[j].id === id) return EXTRAS[j];
+    return null;
+  }
   function findGroup(id) { for (var i = 0; i < GROUPS.length; i++) if (GROUPS[i].id === id) return GROUPS[i]; return null; }
-  function contactByName(n) { for (var i = 0; i < CONTACTS.length; i++) if (CONTACTS[i].name === n) return CONTACTS[i]; return null; }
+  function contactByName(n) {
+    var all = CONTACTS.concat(EXTRAS);
+    for (var i = 0; i < all.length; i++) {
+      if (all[i].name === n) return all[i];
+      if (all[i].aliases && all[i].aliases.indexOf(n) !== -1) return all[i];
+    }
+    return null;
+  }
   function catUrl(f) { return CATBOX + f; }
+  // 表情包：主源 catbox，挂了自动换仓库里的备份（同一提交号）
+  function stickerImg(name, extra) {
+    var f = STICKERS[name]; if (!f) return '';
+    var fb = 'https://cdn.jsdelivr.net/gh/' + WALL_REPO + '@' + WALL_REF + '/stickers/' + f;
+    return '<img src="' + catUrl(f) + '" alt="' + esc(name) + '" loading="lazy" ' + (extra || '') +
+      ' onerror="if(!this.dataset.fb){this.dataset.fb=1;this.src=\'' + fb + '\'}">';
+  }
   function esc(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
   function pad2(n) { return (n < 10 ? '0' : '') + n; }
   function hhmm() { var d = new Date(); return pad2(d.getHours()) + ':' + pad2(d.getMinutes()); }
@@ -132,6 +155,80 @@
       .trim();
   }
 
+  // ─── 人设单一真源 = 卡的世界书（按条目名/段落挑，绝不整本拉——整本会把主线格式规则灌进副轨打架） ───
+  var _wbCache = null, _wbAt = 0;
+  async function wbEntries() {
+    if (_wbCache && Date.now() - _wbAt < 5 * 60 * 1000) return _wbCache;
+    try {
+      var names = getCharWorldbookNames('current');
+      var books = [];
+      if (names && names.primary) books.push(names.primary);
+      if (names && names.additional) books = books.concat(names.additional);
+      var all = [];
+      for (var i = 0; i < books.length; i++) {
+        try { var es = await getWorldbook(books[i]); if (es && es.length) all = all.concat(es); } catch (e1) {}
+      }
+      if (all.length) { _wbCache = all; _wbAt = Date.now(); }
+    } catch (e) { console.log('[霖州手机] 读世界书失败，用脚本内兜底人设', e); }
+    return _wbCache || [];
+  }
+  function wbFind(entries, test) {
+    for (var i = 0; i < entries.length; i++) {
+      var e = entries[i]; if (e.enabled === false) continue;
+      if (test(String(e.name || ''))) return String(e.content || '');
+    }
+    return '';
+  }
+  function cut(s, n) { s = String(s || '').trim(); return s.length > n ? s.slice(0, n) + '…' : s; }
+  // 一个人的档案：独立条目 > NPC 合集里 [NPC·名] 那一段 > 脚本内手写兜底
+  async function personaOf(c) {
+    var es = await wbEntries(); if (!es.length) return c.voice;
+    var names = [c.name].concat(c.aliases || []);
+    var own = wbFind(es, function (n) { return names.some(function (x) { return n === x || n.indexOf(x + '完整人设') === 0 || n.indexOf(x + '（') === 0; }); });
+    if (own) return cut(own, 3500);
+    // NPC 合集按时代分了几份，同名人物别的时代也有 → 先只看「高中」那几条，没有再看全部
+    var pools = [[], []];
+    es.forEach(function (e) {
+      var n = String(e.name || ''); if (e.enabled === false || !/^NPC[（(]/.test(n)) return;
+      pools[/高中/.test(n) ? 0 : 1].push(e.content || '');
+    });
+    for (var k = 0; k < 2; k++) {
+      var pool = '\n' + pools[k].join('\n');
+      for (var a = 0; a < names.length; a++) {
+        var re = new RegExp('\\[NPC[·・:：]\\s*' + names[a].replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*\\]([\\s\\S]*?)(?=\\n\\[NPC[·・:：]|$)');
+        var m = pool.match(re);
+        if (m && m[1].trim().length > 15) return cut(m[1], 1800);
+      }
+    }
+    return c.voice;
+  }
+  // 线上说话方式：「线上人设」条目里提到这个人的那几段（去掉纯头像/背景清单行）
+  async function onlineStyleOf(c) {
+    var es = await wbEntries(); if (!es.length) return '';
+    var txt = wbFind(es, function (n) { return n.indexOf('线上人设') === 0; }); if (!txt) return '';
+    var lines = txt.split('\n'), out = [], grab = 0;
+    for (var i = 0; i < lines.length; i++) {
+      var l = lines[i];
+      if (/\.(jpe?g|png|gif)\b/i.test(l)) continue;
+      if (l.indexOf(c.name) !== -1) grab = 6;
+      if (grab > 0) { if (l.trim()) out.push(l.trim()); grab--; }
+    }
+    return cut(out.join('\n'), 900);
+  }
+  async function bondOf(c) {
+    if (c.name !== '周言' && c.name !== '沈锡元') return '';
+    var es = await wbEntries(); if (!es.length) return '';
+    return cut(wbFind(es, function (n) { return n.indexOf('三人羁绊') === 0; }), 700);
+  }
+  // 群的定义：「群聊列表」条目里 #### 群聊: 名 那一段
+  async function groupDefOf(g) {
+    var es = await wbEntries(); if (!es.length) return '';
+    var txt = wbFind(es, function (n) { return n.indexOf('群聊列表') === 0; }); if (!txt) return '';
+    var re = new RegExp('####\\s*群聊[:：]\\s*' + g.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '([\\s\\S]*?)(?=\\n####|\\n---|$)');
+    var m = txt.match(re);
+    return m ? cut(m[1], 700) : '';
+  }
+
   // ─── 聊天变量：序列化写队列 ───
   var _wQ = Promise.resolve();
   function phoneData() {
@@ -151,7 +248,7 @@
 
   // ─── 设置：存浏览器本地（跟卡/聊天无关） ───
   var CFG_KEY = 'lz_phone_cfg';
-  var DEFAULT_CFG = { apiurl: '', key: '', model: '', source: 'openai', temperature: 1.1, inject: true, floor: true };
+  var DEFAULT_CFG = { apiurl: '', key: '', model: '', source: 'openai', temperature: 1.1, inject: true, floor: true, plotN: 8 };
   function loadCfg() {
     try { var raw = VIEW.localStorage.getItem(CFG_KEY); if (raw) return Object.assign({}, DEFAULT_CFG, JSON.parse(raw)); } catch (e) {}
     return Object.assign({}, DEFAULT_CFG);
@@ -755,6 +852,10 @@
           '<div class="lz-btns"><button class="lz-btn" id="' + NS + '-b-models">拉取模型列表</button><button class="lz-btn" id="' + NS + '-b-test">测试</button><button class="lz-btn pri" id="' + NS + '-b-save">保存</button></div>' +
           '<div class="lz-note" id="' + NS + '-note"></div>' +
         '</div>' +
+        '<div class="lz-card"><h3>手机读多少主线</h3>' +
+          '<p>生成回复前，手机会读主线最近这么多楼（每楼最多 900 字），剧情才接得上。人设直接从卡的世界书里拉，不用设。</p>' +
+          '<div class="lz-pills" id="' + NS + '-plotn">' + [4, 8, 12, 20].map(function (n) { return '<span class="lz-pill' + (String(c.plotN || 8) === String(n) ? ' on' : '') + '" data-v="' + n + '">' + n + ' 楼</span>'; }).join('') + '</div>' +
+        '</div>' +
         '<div class="lz-card"><h3>主线联动</h3>' +
           '<p><b>写进正文</b>：对方回完，这段聊天记录以气泡形式写进上一楼正文，你和 AI 都看得见（UWU 老师的方案）。</p>' +
           '<div class="lz-pills"><span class="lz-pill' + (c.floor !== false ? ' on' : '') + '" id="' + NS + '-fl-on">写进正文</span><span class="lz-pill' + (c.floor === false ? ' on' : '') + '" id="' + NS + '-fl-off">不写</span></div>' +
@@ -774,7 +875,7 @@
     function readForm() {
       var on = srcBox.querySelector('.lz-pill.on');
       return { apiurl: $('f-url').value.trim(), key: $('f-key').value.trim(), model: $('f-model').value.trim(),
-        source: on ? on.dataset.v : 'openai', temperature: DEFAULT_CFG.temperature, inject: cfg.inject !== false, floor: cfg.floor !== false };
+        source: on ? on.dataset.v : 'openai', temperature: DEFAULT_CFG.temperature, inject: cfg.inject !== false, floor: cfg.floor !== false, plotN: cfg.plotN || 8 };
     }
     function note(t, cls) { var n = $('note'); n.textContent = t; n.className = 'lz-note ' + (cls || ''); }
     $('b-save').addEventListener('click', function () { saveCfg(readForm()); note('已保存', 'ok'); });
@@ -804,6 +905,12 @@
         note(txt ? '通了（' + ((Date.now() - t0) / 1000).toFixed(1) + 's）：' + txt.trim().slice(0, 40) : '有响应但内容为空', txt ? 'ok' : 'bad');
       } catch (e) { note('失败：' + (e && e.message ? e.message : e), 'bad'); }
     });
+    $('plotn').querySelectorAll('.lz-pill').forEach(function (p) {
+      p.addEventListener('click', function () {
+        $('plotn').querySelectorAll('.lz-pill').forEach(function (q) { q.classList.remove('on'); }); p.classList.add('on');
+        var f = readForm(); f.plotN = parseInt(p.dataset.v, 10); saveCfg(f);
+      });
+    });
     $('fl-on').addEventListener('click', function () { var f = readForm(); f.floor = true; saveCfg(f); $('fl-on').classList.add('on'); $('fl-off').classList.remove('on'); });
     $('fl-off').addEventListener('click', function () { var f = readForm(); f.floor = false; saveCfg(f); $('fl-off').classList.add('on'); $('fl-on').classList.remove('on'); });
     $('inj-on').addEventListener('click', function () { var f = readForm(); f.inject = true; saveCfg(f); $('inj-on').classList.add('on'); $('inj-off').classList.remove('on'); refreshInjection(); });
@@ -822,7 +929,7 @@
     h += '<div class="lz-sec">群聊</div>';
     GROUPS.forEach(function (g) {
       var hist = getHistory('g_' + g.id), last = hist[hist.length - 1];
-      var pv = last ? (last.sender === 'user' ? '我' : (last.senderName || '?')) + '：' + preview(last.text) : g.desc;
+      var pv = last ? (last.sender === 'user' ? '我' : (last.senderName || '?')) + '：' + preview(last.kind ? msgToText(last) : last.text) : '';
       h += '<div class="lz-item" data-a="group" data-id="' + g.id + '"><div class="lz-av g">' + g.icon + '</div>' +
         '<div><div class="lz-nm">' + esc(g.name) + '</div><div class="lz-pv">' + esc(pv) + '</div></div>' +
         '<div class="lz-tm">' + (last ? esc(last.time || '') : '') + '</div></div>';
@@ -830,7 +937,7 @@
     h += '<div class="lz-sec">联系人</div>';
     CONTACTS.forEach(function (c) {
       var hist = getHistory(c.id), last = hist[hist.length - 1];
-      var pv = last ? (last.sender === 'user' ? '我：' : '') + preview(last.text) : c.relation;
+      var pv = last ? (last.sender === 'user' ? '我：' : '') + preview(last.kind ? msgToText(last) : last.text) : '';
       h += '<div class="lz-item" data-a="chat" data-id="' + c.id + '"><div class="lz-av" style="background-image:url(\'' + catUrl(c.avatar) + '\')"></div>' +
         '<div><div class="lz-nm">' + esc(c.name) + '</div><div class="lz-pv">' + esc(pv) + '</div></div>' +
         '<div class="lz-tm">' + (last ? esc(last.time || '') : '') + '</div></div>';
@@ -921,7 +1028,7 @@
   }
   function renderChat(cid) {
     var c = findContact(cid); if (!c) return showScreen('home');
-    renderChatUI(c.name, c.relation, cid, function () { queueText(cid); }, function () { sendPrivate(cid); });
+    renderChatUI(c.name, '', cid, function () { queueText(cid); }, function () { sendPrivate(cid); });
   }
   function renderGroup(gid) {
     var g = findGroup(gid); if (!g) return showScreen('home');
@@ -955,7 +1062,7 @@
       var w = Math.min(180, 70 + (m.secs || 1) * 4);
       inner = '<div class="lz-bub vc" style="width:' + w + 'px" data-vc="1"><span class="vc-play">▶</span><span class="vc-wave"><i></i><i></i><i></i><i></i><i></i></span><span class="vc-sec">' + (m.secs || 1) + '″</span></div>' +
         '<div class="vc-text">' + esc(m.text || '') + '</div>';
-    } else if (bqb && STICKERS[bqb[1]]) inner = '<div class="lz-bub stk"><img src="' + catUrl(STICKERS[bqb[1]]) + '" alt="' + esc(bqb[1]) + '" loading="lazy"></div>';
+    } else if (bqb && STICKERS[bqb[1]]) inner = '<div class="lz-bub stk">' + stickerImg(bqb[1]) + '</div>';
     else inner = '<div class="lz-bub">' + esc(bqbToText(m.text || '')) + '</div>';
     return '<div class="lz-msg' + (me ? ' me' : '') + '" data-mid="' + esc(m.id || '') + '"><div class="lz-ma" style="' + av + '"></div><div class="lz-mb">' + sn + inner +
       '<div class="lz-mt">' + esc(m.time || '') + '</div></div></div>';
@@ -971,7 +1078,7 @@
   function renderStickers() {
     var grid = $('grid'); if (!grid) return;
     grid.innerHTML = STICKER_NAMES.map(function (n) {
-      return '<div class="lz-cell" title="' + esc(n) + '" data-n="' + esc(n) + '"><img src="' + catUrl(STICKERS[n]) + '" alt="' + esc(n) + '" loading="lazy"></div>';
+      return '<div class="lz-cell" title="' + esc(n) + '" data-n="' + esc(n) + '">' + stickerImg(n) + '</div>';
     }).join('');
     grid.querySelectorAll('.lz-cell').forEach(function (el) { el.addEventListener('click', function () { sendSticker(el.dataset.n); }); });
   }
@@ -1134,7 +1241,11 @@
         var k = line.search(/[:：]/); if (k <= 0 || k > 8) continue;
         var name = line.substring(0, k).replace(/[\[\]【】]/g, '').trim(), body = line.substring(k + 1).trim();
         if (!body) continue;
-        var c = contactByName(name); if (!c) continue;
+        var c = contactByName(name);
+        if (!c) {
+          if (!g.open || name.length > 8 || name === userName() || /^(我|user)$/i.test(name)) continue;
+          c = { id: 'npc_' + name, name: name, avatar: '', theme: '#8a7d70' };   // 开放群里的随机同学/陌生人
+        }
         var m = parseNpcLine(body, c);
         if (m.kind === 'claim' && !claimLastUserPacket(hist)) continue;
         if (m.kind === 'redpacket') m.id = 'n' + Date.now() + i;
@@ -1203,9 +1314,11 @@
   function mainContext() {
     try {
       var msgs = getChatMessages('0-{{lastMessageId}}'); if (!msgs || !msgs.length) return '';
-      return msgs.slice(-8).map(function (m) {
-        var t = (m.message || '').replace(/```[\s\S]*?```/g, '').replace(/<think>[\s\S]*?<\/think>/gi, '').replace(/<[^>]+>/g, '').trim();
-        if (t.length > 320) t = t.substring(0, 320) + '…';
+      var n = parseInt(cfg.plotN, 10); if (!(n > 0)) n = 8;
+      // 每楼 900 字（旧版 320 字≈一层半楼，手机等于失明——SB 发卡日验尸的教训）
+      return msgs.slice(-n).map(function (m) {
+        var t = (m.message || '').replace(/```[\s\S]*?```/g, '').replace(/<think>[\s\S]*?<\/think>/gi, '').replace(/<[^>]+>/g, '').replace(/\n{2,}/g, '\n').trim();
+        if (t.length > 900) t = t.substring(0, 900) + '…';
         return (m.role === 'user' ? '{{user}}' : '旁白') + '：' + t;
       }).filter(function (l) { return l.length > 4; }).join('\n');
     } catch (e) { return ''; }
@@ -1214,8 +1327,12 @@
 
   async function generatePrivate(c, hist) {
     var ctx = mainContext();
+    var persona = await personaOf(c), online = await onlineStyleOf(c), bond = await bondOf(c);
     var p = '你正在扮演校园故事《霖州往事》里的「' + c.name + '」，通过微信私聊回复{{user}}。\n\n' +
-      '【' + c.name + '的说话方式】\n' + c.voice + '\n\n' +
+      '【' + c.name + '的人物档案】\n' + persona + '\n\n' +
+      (persona !== c.voice ? '【说话方式速记】' + c.voice + '\n\n' : '') +
+      (online ? '【线上人设】\n' + online + '\n\n' : '') +
+      (bond ? '【三人羁绊】\n' + bond + '\n\n' : '') +
       (ctx ? '【主线剧情（最近发生的事，手机聊天要接得上）】\n' + ctx + '\n\n' : '') +
       '【微信聊天记录】\n' + histText(hist, 14) + '\n\n' +
       '【输出规则】\n' +
@@ -1230,14 +1347,24 @@
   async function generateGroup(g, hist) {
     var ctx = mainContext();
     var names = g.members.map(function (id) { var c = findContact(id); return c ? c.name : id; });
-    var voices = g.members.map(function (id) { var c = findContact(id); return c ? '· ' + c.name + '：' + c.voice : ''; }).filter(Boolean).join('\n');
-    var p = '你正在模拟校园故事《霖州往事》里的微信群「' + g.name + '」。群成员：' + names.join('、') + '、{{user}}。\n\n' +
-      '【各人说话方式】\n' + voices + '\n\n' +
+    var def = await groupDefOf(g);
+    // 群里人多，每人只喂档案前 500 字 + 手写速记；最近说过话的人多给一点
+    var recent = {}; hist.slice(-12).forEach(function (m) { if (m.sender !== 'user') recent[m.sender] = 1; });
+    var voices = [];
+    for (var i = 0; i < g.members.length; i++) {
+      var c = findContact(g.members[i]); if (!c) continue;
+      var pers = await personaOf(c);
+      voices.push('· ' + c.name + '：' + c.voice + (pers !== c.voice ? '\n  ' + cut(pers, recent[c.id] ? 900 : 450).replace(/\n+/g, ' ') : ''));
+    }
+    var p = '你正在模拟校园故事《霖州往事》里的微信群「' + g.name + '」。群成员：' + names.join('、') + '、{{user}}' +
+      (g.open ? '，以及若干未列名的同学/陌生人（可以让他们冒泡，起真实的昵称）' : '') + '。\n\n' +
+      (def ? '【这个群（来自世界书）】\n' + def + '\n\n' : '') +
+      '【各人档案与说话方式】\n' + voices.join('\n') + '\n\n' +
       (ctx ? '【主线剧情（最近发生的事）】\n' + ctx + '\n\n' : '') +
       '【群聊记录】\n' + histText(hist, 18) + '\n\n' +
       '【输出规则】\n' +
       '- 输出 2～5 条群成员的新消息，每条一行，格式严格为「角色名：消息」\n' +
-      '- 不必人人都说话，谁会接这句谁说；可以互相接梗、互相拆台\n' +
+      '- 不必人人都说话，谁会接这句谁说；可以互相接梗、互相拆台' + (g.open ? '；名单外的人用「昵称：消息」也行' : '') + '\n' +
       '- 每条不超过 35 字，像真人在群里打字\n' +
       '- 想发表情包写「角色名：<bqb>表情包名</bqb>」，可选：' + stickerHint(20) + '\n' +
       '- 红包写「角色名：(红包+金额|留言)」，语音写「角色名：(语音|内容)」，领{{user}}的红包写「角色名：(领取红包)」；只在合适时用\n' +
