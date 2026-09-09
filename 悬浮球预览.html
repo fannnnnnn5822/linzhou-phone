@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><title>霖州往事 · 悬浮球预览</title>
+<style>
+body{margin:0;font-family:"Microsoft YaHei","PingFang SC",sans-serif;font-size:15px;color:#222}
+.row{display:flex;gap:40px;padding:28px 32px;align-items:center}
+.row.dark{background:#1b1d22;color:#ddd}
+.row.light{background:#f2efe8}
+.row.tavern{background:#2b2b2b url("https://cdn.jsdelivr.net/gh/fannnnnnn5822/linzhou-phone@main/cover.jpg") right/220px auto no-repeat;color:#eee}
+.cell{display:flex;flex-direction:column;align-items:center;gap:10px}
+.cell small{opacity:.7}
+.bigwrap{zoom:3;margin:40px 90px}
+
+/* ═══ 球 ═══ */
+.lz-ball{position:relative;width:56px;height:56px;box-sizing:border-box;cursor:pointer;
+  background:none;border:none;user-select:none;
+  filter:drop-shadow(0 6px 10px rgba(30,40,60,.45));
+  animation:lzFloat 4.6s ease-in-out infinite}
+.lz-ball:hover .lz-cat{transform:rotate(-9deg)}
+.lz-halo{position:absolute;inset:-14px;border-radius:50%;pointer-events:none;
+  background:radial-gradient(circle,rgba(120,175,230,.55) 0%,rgba(120,175,230,.22) 42%,rgba(120,175,230,0) 68%);
+  animation:lzHalo 3.8s ease-in-out infinite}
+.lz-ball svg{position:relative;width:100%;height:100%;display:block;overflow:visible}
+.lz-cat{transform-origin:32px 40px;transition:transform .25s}
+.lz-eye-open{opacity:1}.lz-eye-shut{opacity:0}
+.lz-ball.open .lz-eye-open{opacity:0}.lz-ball.open .lz-eye-shut{opacity:1}
+.lz-ball.open .lz-halo{opacity:.35}
+.lz-star{opacity:0;transform-origin:center;transform-box:fill-box}
+.lz-ball.lit .lz-star{animation:lzTwinkle 2.4s ease-in-out infinite}
+.lz-ball.lit .lz-star:nth-of-type(2){animation-delay:.7s;animation-duration:2.9s}
+.lz-ball.lit .lz-star:nth-of-type(3){animation-delay:1.5s;animation-duration:2.1s}
+.lz-ball.lit .lz-halo{background:radial-gradient(circle,rgba(242,180,190,.6) 0%,rgba(242,180,190,.25) 42%,rgba(242,180,190,0) 68%)}
+.lz-badge{position:absolute;top:-2px;right:-4px;min-width:18px;height:18px;padding:0 5px;border-radius:9px;
+  background:#e2536a;color:#fff;font:700 11px/18px sans-serif;text-align:center;border:2px solid #fff;display:none}
+.lz-ball.lit .lz-badge{display:block}
+@keyframes lzFloat{0%,100%{transform:translateY(0)}50%{transform:translateY(-4px)}}
+@keyframes lzHalo{0%,100%{transform:scale(.9);opacity:.55}50%{transform:scale(1.08);opacity:.95}}
+@keyframes lzTwinkle{0%,100%{opacity:0;transform:scale(.4) rotate(0)}50%{opacity:1;transform:scale(1) rotate(25deg)}}
+</style></head><body>
+
+<template id="svg">
+<svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+  <defs>
+    <linearGradient id="lzWall" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#F6EFE1"/><stop offset=".55" stop-color="#EAE0CF"/><stop offset="1" stop-color="#C9C2DA"/>
+    </linearGradient>
+    <linearGradient id="lzFur" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#F3B36B"/><stop offset="1" stop-color="#D9853F"/>
+    </linearGradient>
+    <linearGradient id="lzRose" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#F7CDD3"/><stop offset="1" stop-color="#E69AA6"/>
+    </linearGradient>
+  </defs>
+  <!-- 星星（未读时闪） -->
+  <path class="lz-star" d="M9 18l1.3 3.2L13.5 22.5 10.3 23.8 9 27l-1.3-3.2L4.5 22.5l3.2-1.3z" fill="#FFF3C4"/>
+  <path class="lz-star" d="M55 12l1 2.4 2.4 1-2.4 1-1 2.4-1-2.4-2.4-1 2.4-1z" fill="#FFF3C4"/>
+  <path class="lz-star" d="M50 30l.8 1.9 1.9.8-1.9.8-.8 1.9-.8-1.9-1.9-.8 1.9-.8z" fill="#FFF3C4"/>
+  <!-- 墙头 -->
+  <rect x="4" y="41" width="56" height="17" rx="5" fill="url(#lzWall)"/>
+  <rect x="4" y="41" width="56" height="3.5" rx="1.5" fill="#FBF7EE"/>
+  <path d="M6 52c8-2 14 2 22 0s16-3 30 1" stroke="#B8B0D2" stroke-width="1.2" fill="none" opacity=".55"/>
+  <!-- 猫 -->
+  <g class="lz-cat">
+    <!-- 耳 -->
+    <path d="M19 30 L21 16 L30 25Z" fill="#D9853F"/>
+    <path d="M45 30 L43 16 L34 25Z" fill="#D9853F"/>
+    <path d="M21.5 27.5 L22.5 20 L27.5 25.5Z" fill="#F4C3B8"/>
+    <path d="M42.5 27.5 L41.5 20 L36.5 25.5Z" fill="#F4C3B8"/>
+    <!-- 头 -->
+    <ellipse cx="32" cy="32" rx="14" ry="12.5" fill="url(#lzFur)"/>
+    <!-- 虎斑 -->
+    <path d="M28 21.5q4-2 8 0" stroke="#B9682A" stroke-width="1.6" stroke-linecap="round" fill="none"/>
+    <path d="M25 24.5q2-1.5 4.5-.5M34.5 24q2.5-1 4.5.5" stroke="#B9682A" stroke-width="1.4" stroke-linecap="round" fill="none"/>
+    <!-- 白嘴 -->
+    <ellipse cx="32" cy="36.5" rx="7.5" ry="5" fill="#FBF3E7"/>
+    <!-- 眼睛 -->
+    <g class="lz-eye-open">
+      <ellipse cx="26.5" cy="31" rx="2.1" ry="2.6" fill="#2E2A25"/>
+      <ellipse cx="37.5" cy="31" rx="2.1" ry="2.6" fill="#2E2A25"/>
+      <circle cx="27.2" cy="30.1" r=".7" fill="#fff"/><circle cx="38.2" cy="30.1" r=".7" fill="#fff"/>
+    </g>
+    <g class="lz-eye-shut">
+      <path d="M24.3 31.2q2.2 1.8 4.4 0M35.3 31.2q2.2 1.8 4.4 0" stroke="#2E2A25" stroke-width="1.5" stroke-linecap="round" fill="none"/>
+    </g>
+    <!-- 鼻嘴 -->
+    <path d="M30.8 34.6h2.4l-1.2 1.4z" fill="#E7909C"/>
+    <path d="M32 36v1.2M32 37.2q-1.4 1.4-2.8.2M32 37.2q1.4 1.4 2.8.2" stroke="#B36A5A" stroke-width=".9" stroke-linecap="round" fill="none"/>
+    <!-- 胡须 -->
+    <path d="M22 35.5l-6-1M22 37.5l-6 1M42 35.5l6-1M42 37.5l6 1" stroke="#5A4A3A" stroke-width=".8" stroke-linecap="round" opacity=".7"/>
+    <!-- 爪 -->
+    <rect x="21" y="39" width="8.5" height="6" rx="3" fill="#FBF3E7"/>
+    <rect x="34.5" y="39" width="8.5" height="6" rx="3" fill="#FBF3E7"/>
+    <path d="M23.5 44v-2M25.5 44v-2.3M27.5 44v-2M37 44v-2M39 44v-2.3M41 44v-2" stroke="#E0B8A0" stroke-width=".8" stroke-linecap="round"/>
+  </g>
+  <!-- 墙角玫瑰 -->
+  <circle cx="53" cy="47" r="5" fill="url(#lzRose)"/>
+  <circle cx="53" cy="47" r="2.6" fill="#EFA9B5"/>
+  <circle cx="53" cy="47" r="1.1" fill="#D97F91"/>
+  <path d="M48 50q-4 1-5 4 4 0 5.5-3z" fill="#7FA84B"/>
+  <path d="M57.5 50.5q4 .5 4.5 3.5-3.5.5-5-2.5z" fill="#7FA84B"/>
+  <circle cx="11" cy="47" r="3.2" fill="url(#lzRose)"/><circle cx="11" cy="47" r="1.3" fill="#D97F91"/>
+</svg>
+</template>
+
+<script>
+function ball(cls, badge){
+  var d=document.createElement('div');d.className='lz-ball '+cls;
+  d.innerHTML='<span class="lz-halo"></span>'+document.getElementById('svg').innerHTML+'<span class="lz-badge">'+(badge||'')+'</span>';
+  return d;
+}
+function cell(label, cls, badge, big){
+  var c=document.createElement('div');c.className='cell';
+  var b=ball(cls,badge);
+  if(big){var w=document.createElement('div');w.className='bigwrap';w.appendChild(b);c.appendChild(w);} else c.appendChild(b);
+  var s=document.createElement('small');s.textContent=label;c.appendChild(s);return c;
+}
+function row(bg){var r=document.createElement('div');r.className='row '+bg;
+  r.appendChild(cell('待机（呼吸）','',''));
+  r.appendChild(cell('有未读（星星+粉光圈）','lit','3'));
+  r.appendChild(cell('手机打开（闭眼）','open',''));
+  document.body.appendChild(r);}
+row('dark');row('light');row('tavern');
+var r=document.createElement('div');r.className='row dark';r.appendChild(cell('放大3倍看细节','lit','2',true));document.body.appendChild(r);
+</script>
+</body></html>
