@@ -7,7 +7,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '1.6.1';
+  var VERSION = '1.7.0';
   var NS = 'lz-phone';
   var BTN = '\u{1F4F1}手机';
   var CATBOX = 'https://files.catbox.moe/';
@@ -192,7 +192,7 @@
   // ─── 人设单一真源 = 卡的世界书（按条目名/段落挑，绝不整本拉——整本会把主线格式规则灌进副轨打架） ───
   var _wbCache = null, _wbAt = 0;
   async function wbEntries() {
-    if (_wbCache && Date.now() - _wbAt < 5 * 60 * 1000) return _wbCache;
+    if (_wbCache && Date.now() - _wbAt < 60 * 1000) return _wbCache;
     try {
       var names = getCharWorldbookNames('current');
       var books = [];
@@ -214,17 +214,64 @@
     return '';
   }
   function cut(s, n) { s = String(s || '').trim(); return s.length > n ? s.slice(0, n) + '…' : s; }
+
+  // ─── 当前时代：卡按时代开关世界书条目（NPC（高中线-核心人员）/ 主角人设（大学线）/ …），据此认现在演到哪一代 ───
+  var ERAS = [
+    { key: '大学时代', tag: /大学/, marks: ['【大学时代】', '主角人设（大学线）', 'NPC（大学线）', '时空与地理补充（大学线）'] },
+    { key: '成人·破镜重圆', tag: /破镜重圆/, marks: ['【成人时代-破镜重圆】', '主角人设（成人-破镜重圆）', 'NPC（成人-破镜重圆）', '久别重逢'] },
+    { key: '成人·同路而行', tag: /同路而行/, marks: ['【成人时代-同路而行】', '主角人设（成人-同路而行）', 'NPC（成人-同路而行）'] },
+    { key: '高中时代', tag: /高中/, marks: ['【高中时代】', 'NPC（高中线-核心人员）', '校园时空协议'] }
+  ];
+  async function eraOf() {
+    var es = await wbEntries();
+    for (var i = 0; i < ERAS.length; i++) {
+      for (var j = 0; j < es.length; j++) {
+        var e = es[j]; if (e.enabled === false) continue;
+        var n = String(e.name || '');
+        for (var k = 0; k < ERAS[i].marks.length; k++) if (n.indexOf(ERAS[i].marks[k]) === 0) return ERAS[i];
+      }
+    }
+    return ERAS[ERAS.length - 1];   // 认不出就当高中（卡的默认线）
+  }
+  // 同一类条目卡里按时代备了好几份（线上人设（高中线）/（大学线）…）而且常常同时开着 →
+  // 先挑名字带当前时代标签的那份，挑不到再退回第一份
+  function wbPickEra(entries, prefix, era) {
+    var first = '';
+    for (var i = 0; i < entries.length; i++) {
+      var e = entries[i]; if (e.enabled === false) continue;
+      var n = String(e.name || ''); if (n.indexOf(prefix) !== 0) continue;
+      if (era && era.tag.test(n)) return String(e.content || '');
+      if (!first) first = String(e.content || '');
+    }
+    return first;
+  }
+  // 三人住哪儿 —— 卡里的硬事实，但写在默认关着的条目里（「防瞬移」楼层平面图 /
+  // 「时空与地理补充（大学线）」/ 「主角人设（成人-…）」/ 周言·沈锡元档案的 residence），
+  // 手机读不到，所以按时代抄在这儿。
+  var LIVING = {
+    '高中时代': '三人住同一个小区的同一栋楼：金华苑3栋。{{user}}住1004、周言住1003，同层隔壁；沈锡元住1202，在他们楼上两层（他初二那年搬来，才成了{{user}}的楼上邻居）。'
+      + '所以一起上下学、在电梯和走廊碰见、下楼买宵夜、上楼借东西、看见谁家灯还亮着都是日常，约见面通常就是「楼下」「电梯口」「我上来」。'
+      + '但公寓隔音正常：隔着墙和楼板听不见对方屋里说话打游戏，只有装修、砸墙、激烈争吵这种大动静才可能模糊听见。',
+    '大学时代': '三人不再天天同楼：{{user}}和周言都在霖州大学、平时住校（{{user}}在14号宿舍楼），周末和假期才回金华苑的家；'
+      + '沈锡元去了隔壁东海市的体育大学，住运动员公寓2栋（和陆飞同寝）。霖州到东海150公里、高锸 50 分钟，他几乎每个周末都回霖州。'
+      + '宿舍楼异性禁入，找人只能约在宿舍楼下大厅。所以「下楼」「我上来」这类高中时的顺口话不再成立，见面得约时间、赶车。',
+    '成人·破镜重圆': '断联八年，三人各住各的：周言在新城区「海棠湾」高层公寓，沈锡元在新开发区「铂岸壹号」江景大平层，{{user}}住公司安排的市中心单身公寓。'
+      + '金华苑是少年时代的旧址，已经不是谁的家了。',
+    '成人·同路而行': '三人同住霖州市中心的「宛江华府」1801，那是他们一起挑家具、一起争墙壁颜色布置起来的家。'
+  };
+  async function livingOf() { var era = await eraOf(); return { era: era.key, text: LIVING[era.key] || '' }; }
   // 一个人的档案：独立条目 > NPC 合集里 [NPC·名] 那一段 > 脚本内手写兜底
   async function personaOf(c) {
     var es = await wbEntries(); if (!es.length) return c.voice;
     var names = [c.name].concat(c.aliases || []);
     var own = wbFind(es, function (n) { return names.some(function (x) { return n === x || n.indexOf(x + '完整人设') === 0 || n.indexOf(x + '（') === 0; }); });
     if (own) return cut(own, 3500);
-    // NPC 合集按时代分了几份，同名人物别的时代也有 → 先只看「高中」那几条，没有再看全部
+    // NPC 合集按时代分了几份，同名人物别的时代也有 → 先看当前时代那几条，没有再看全部
+    var era = await eraOf();
     var pools = [[], []];
     es.forEach(function (e) {
       var n = String(e.name || ''); if (e.enabled === false || !/^NPC[（(]/.test(n)) return;
-      pools[/高中/.test(n) ? 0 : 1].push(e.content || '');
+      pools[era.tag.test(n) ? 0 : 1].push(e.content || '');
     });
     for (var k = 0; k < 2; k++) {
       var pool = '\n' + pools[k].join('\n');
@@ -239,7 +286,7 @@
   // 线上说话方式：「线上人设」条目里提到这个人的那几段（去掉纯头像/背景清单行）
   async function onlineStyleOf(c) {
     var es = await wbEntries(); if (!es.length) return '';
-    var txt = wbFind(es, function (n) { return n.indexOf('线上人设') === 0; }); if (!txt) return '';
+    var txt = wbPickEra(es, '线上人设', await eraOf()); if (!txt) return '';
     var lines = txt.split('\n'), out = [], grab = 0;
     for (var i = 0; i < lines.length; i++) {
       var l = lines[i];
@@ -268,12 +315,21 @@
     });
     return cut(out.join('\n'), 700);
   }
-  // 群的定义：「群聊列表」条目里 #### 群聊: 名 那一段
+  // 群的定义：「群聊列表」条目里 #### 群聊: 名 那一段。
+  // 先查当前时代那份；查不到再扫别的时代——老群不会因为升学就解散（高中群到了大学线还在）
   async function groupDefOf(g) {
     var es = await wbEntries(); if (!es.length) return '';
-    var txt = wbFind(es, function (n) { return n.indexOf('群聊列表') === 0; }); if (!txt) return '';
     var re = new RegExp('####\\s*群聊[:：]\\s*' + g.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '([\\s\\S]*?)(?=\\n####|\\n---|$)');
-    var m = txt.match(re);
+    var era = await eraOf();
+    var txt = wbPickEra(es, '群聊列表', era);
+    var m = txt && txt.match(re);
+    if (!m) {
+      for (var i = 0; i < es.length && !m; i++) {
+        var e = es[i]; if (e.enabled === false) continue;
+        if (String(e.name || '').indexOf('群聊列表') !== 0) continue;
+        m = String(e.content || '').match(re);
+      }
+    }
     return m ? cut(m[1], 700) : '';
   }
 
@@ -1486,12 +1542,13 @@
 
   async function generatePrivate(c, hist) {
     var ctx = mainContext();
-    var persona = await personaOf(c), online = await onlineStyleOf(c), bond = await bondOf(c), rules = await phoneRulesOf('private');
+    var persona = await personaOf(c), online = await onlineStyleOf(c), bond = await bondOf(c), rules = await phoneRulesOf('private'), living = await livingOf();
     var p = '你正在扮演校园故事《霖州往事》里的「' + c.name + '」，通过微信私聊回复{{user}}。\n\n' +
       '【' + c.name + '的人物档案】\n' + persona + '\n\n' +
       (persona !== c.voice ? '【说话方式速记】' + c.voice + '\n\n' : '') +
       (online ? '【线上人设】\n' + online + '\n\n' : '') +
       (bond ? '【三人羁绊】\n' + bond + '\n\n' : '') +
+      (living.text ? '【{{user}}·周言·沈锡元 现在住哪儿 · 当前是' + living.era + '】\n' + living.text + '\n\n' : '') +
       (rules ? '【原卡的手机聊天规则（行为部分；输出格式以下方【输出规则】为准）】\n' + rules + '\n\n' : '') +
       OMNI_RULES(c.name) + '\n' +
       (ctx ? '【主线剧情（最近发生的事——这是给你看的背景，' + c.name + '只知道自己在场的部分）】\n' + ctx + '\n\n' : '') +
@@ -1508,7 +1565,7 @@
   async function generateGroup(g, hist) {
     var ctx = mainContext();
     var names = g.members.map(function (id) { var c = findContact(id); return c ? c.name : id; });
-    var def = await groupDefOf(g), rules = await phoneRulesOf('group');
+    var def = await groupDefOf(g), rules = await phoneRulesOf('group'), living = await livingOf();
     var cnt = g.open ? '5～10' : (g.members.length <= 3 ? '3～6' : '4～8');
     // 群里人多，每人只喂档案前 500 字 + 手写速记；最近说过话的人多给一点
     var recent = {}; hist.slice(-12).forEach(function (m) { if (m.sender !== 'user') recent[m.sender] = 1; });
@@ -1521,6 +1578,7 @@
     var p = '你正在模拟校园故事《霖州往事》里的微信群「' + g.name + '」。群成员：' + names.join('、') + '、{{user}}' +
       (g.open ? '，以及若干未列名的同学/陌生人（可以让他们冒泡，起真实的昵称）' : '') + '。\n\n' +
       (def ? '【这个群（来自世界书）】\n' + def + '\n\n' : '') +
+      (living.text ? '【{{user}}·周言·沈锡元 现在住哪儿 · 当前是' + living.era + '】\n' + living.text + '\n\n' : '') +
       '【各人档案与说话方式】\n' + voices.join('\n') + '\n\n' +
       (rules ? '【原卡的群聊规则（行为部分；输出格式以下方【输出规则】为准）】\n' + rules + '\n\n' : '') +
       OMNI_RULES('每个群成员') + '- 群里每个人各自判断：这段正文里有我吗？没有=我不知道这件事\n\n' +
@@ -1556,7 +1614,7 @@
   try {
     eventOn(tavern_events.MESSAGE_RECEIVED, function () { _story.id = -1; setTimeout(tick, 300); });   // 新楼来了 → 重新认剧情时间
     eventOn(tavern_events.CHAT_CHANGED, function () {
-      _story.id = -1;
+      _story.id = -1; _wbCache = null; _wbAt = 0;   // 换开场白/换聊天可能换时代 → 世界书重读
       setOpen(false); currentScreen = 'lock'; currentChatId = null;
       clearTimeout(chatTimer);
       chatTimer = setTimeout(function () { ensureMounted(); placeBall(); refreshInjection(); }, 400);
