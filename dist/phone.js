@@ -7,7 +7,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '1.6.0';
+  var VERSION = '1.6.1';
   var NS = 'lz-phone';
   var BTN = '\u{1F4F1}手机';
   var CATBOX = 'https://files.catbox.moe/';
@@ -290,7 +290,8 @@
   }
   function getHistory(chatId) { return phoneData()['h_' + chatId] || []; }
   function saveHistory(chatId, msgs) {
-    if (msgs.length > 60) msgs = msgs.slice(-60);
+    // 手机记忆存档 400 条（只进副轨请求不进主线，Fan 9-10）
+    if (msgs.length > 400) msgs = msgs.slice(-400);
     return updatePhone(function (p) { p['h_' + chatId] = msgs; });
   }
 
@@ -1494,7 +1495,7 @@
       (rules ? '【原卡的手机聊天规则（行为部分；输出格式以下方【输出规则】为准）】\n' + rules + '\n\n' : '') +
       OMNI_RULES(c.name) + '\n' +
       (ctx ? '【主线剧情（最近发生的事——这是给你看的背景，' + c.name + '只知道自己在场的部分）】\n' + ctx + '\n\n' : '') +
-      '【微信聊天记录】\n' + histText(hist, 14) + '\n\n' +
+      '【微信聊天记录】\n' + histText(hist, 120) + '\n\n' +
       '【输出规则】\n' +
       '- 只写' + c.name + '发出的新消息，1～4 条按情绪和话题波动（不要每次都一样多），每条一行，只写消息内容\n' +
       '- 每条不超过 35 字，像真人打字，不复述{{user}}的话\n' +
@@ -1524,7 +1525,7 @@
       (rules ? '【原卡的群聊规则（行为部分；输出格式以下方【输出规则】为准）】\n' + rules + '\n\n' : '') +
       OMNI_RULES('每个群成员') + '- 群里每个人各自判断：这段正文里有我吗？没有=我不知道这件事\n\n' +
       (ctx ? '【主线剧情（最近发生的事——背景参考，每个人只知道自己在场的部分）】\n' + ctx + '\n\n' : '') +
-      '【群聊记录】\n' + histText(hist, 18) + '\n\n' +
+      '【群聊记录】\n' + histText(hist, 120) + '\n\n' +
       '【输出规则】\n' +
       '- 输出 ' + cnt + ' 条群成员的新消息（热闹话题可多、冷场可少），每条一行，格式严格为「角色名：消息」\n' +
       '- 不必人人都说话，谁会接这句谁说；可以互相接梗、互相拆台' + (g.open ? '；名单外的人用「昵称：消息」也行' : '') + '\n' +
